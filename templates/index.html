@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>신한 자영업 경영지원 컨설팅 | 단계형 분석</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260430n">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ─────────────────────────────────────────────── 글로벌 상단 헤더 ─── -->
+<header class="app-header">
+  <div class="brand">
+    <div class="brand-mark">SHINHAN</div>
+    <div class="brand-meta">
+      <div class="brand-title">자영업 경영지원 컨설팅</div>
+      <div class="brand-sub">공공데이터 기반 단계형 진단 · PoC</div>
+    </div>
+  </div>
+  <nav class="header-nav">
+    <a href="#" class="nav-link" data-jump="home">홈</a>
+    <a href="#" class="nav-link" data-jump="result">최근 분석 결과</a>
+    <span class="nav-tag">v2 · 데모</span>
+  </nav>
+</header>
+
+<!-- ─────────────────────────────────────────────── 단계 표시 ─── -->
+<div class="stepper" id="stepper">
+  <div class="step active" data-step="1"><span>1</span>사용자 유형</div>
+  <div class="step"        data-step="2"><span>2</span>지역·상권·업종</div>
+  <div class="step"        data-step="3"><span>3</span>사업 조건 입력</div>
+  <div class="step"        data-step="4"><span>4</span>분석 진행</div>
+  <div class="step"        data-step="5"><span>5</span>결과 컨설팅</div>
+</div>
+
+<!-- ─────────────────────────────────────────────── 메인 ─── -->
+<main class="main">
+
+  <!-- 0. 홈 화면 -->
+  <section class="panel home-panel" id="panel-home">
+    <div class="hero">
+      <div class="hero-text">
+        <div class="hero-tag">신한금융그룹 · 자영업 컨설팅 PoC</div>
+        <h1>자영업 창업과 운영,<br>감이 아니라 <strong>데이터</strong>로 판단하세요.</h1>
+        <p class="hero-desc">
+          상권, 유동인구, 경쟁점, 매출 가능성, 임대료 부담, 업종 생존율을 분석하고
+          사업에 필요한 자금, 보험, 카드 매출관리, 성장지원 방향까지 한 번에 점검해드립니다.
+        </p>
+        <div class="hero-actions">
+          <button class="btn btn-primary"   data-action="start-create">창업 컨설팅 시작하기</button>
+          <button class="btn btn-secondary" data-action="start-operate">운영 매장 진단하기</button>
+          <button class="btn btn-ghost"     data-action="open-samples">샘플 리포트 보기</button>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-card">
+          <div class="stat-num" id="stat-areas">—</div>
+          <div class="stat-label">분석 가능 상권</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num" id="stat-services">—</div>
+          <div class="stat-label">서비스 업종</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num">2019~2024</div>
+          <div class="stat-label">분석 기준 기간</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-num">7곳</div>
+          <div class="stat-label">공공데이터 출처</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="home-grid">
+      <div class="feature-card">
+        <div class="feature-num">01</div>
+        <div class="feature-title">상권 진단</div>
+        <div class="feature-desc">선택 상권의 매출, 점포 수, 유동인구, 임대료, 생존율을 종합 점검합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">02</div>
+        <div class="feature-title">창업·운영 적합도</div>
+        <div class="feature-desc">사용자 유형에 맞춰 창업 적합도/운영 안정도/확장 적합도/재무 체력 점수를 산출합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">03</div>
+        <div class="feature-title">자금·손익분기 시뮬레이션</div>
+        <div class="feature-desc">손익분기 매출, 이자부담률, 매출 감소 시 생존기간을 시뮬레이션합니다.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-num">04</div>
+        <div class="feature-title">신한 서비스 연결</div>
+        <div class="feature-desc">은행·카드·보험·증권 상담 필요성을 진단해 적합한 상담 경로를 안내합니다.</div>
+      </div>
+    </div>
+
+    <div class="sample-section" id="sample-section" style="display:none">
+      <h2>샘플 리포트로 체험하기</h2>
+      <p class="sample-desc">공공데이터 + 합성 점포 데이터를 활용한 데모 케이스입니다. 클릭하면 결과 컨설팅 화면을 바로 확인할 수 있습니다.</p>
+      <div class="sample-grid" id="sample-grid"></div>
+    </div>
+
+    <div class="disclaimer">
+      본 서비스는 공공데이터와 합성 데이터에 기반한 PoC입니다. 대출 가능 여부와 금리, 보험 보장 범위는 실제 심사 및 상담을 통해 확인해야 합니다.
+    </div>
+  </section>
+
+  <!-- 1. 사용자 유형 -->
+  <section class="panel" id="panel-user-type" style="display:none">
+    <div class="panel-head">
+      <h2>사용자 유형을 선택해주세요</h2>
+      <p>유형에 따라 입력 항목과 결과 해석이 달라집니다.</p>
+    </div>
+    <div class="usertype-grid" id="usertype-grid">
+      <div class="usertype-card" data-type="창업 예정자">
+        <div class="ut-icon">🏪</div>
+        <div class="ut-title">창업 예정자</div>
+        <div class="ut-desc">입지 적합도, 예상 매출, 경쟁 강도, 초기 자금, 보험·카드 준비사항 중심으로 컨설팅합니다.</div>
+      </div>
+      <div class="usertype-card" data-type="운영 중인 사업자">
+        <div class="ut-icon">📈</div>
+        <div class="ut-title">운영 중인 사업자</div>
+        <div class="ut-desc">상권 평균 대비 위치, 매출 개선 포인트, 고정비·대출 부담, 카드·보험 점검 중심으로 컨설팅합니다.</div>
+      </div>
+      <div class="usertype-card" data-type="금융 점검">
+        <div class="ut-icon">💼</div>
+        <div class="ut-title">금융 점검</div>
+        <div class="ut-desc">통장 잔액만으로는 부족합니다. 신한 계좌·카드 지출·대출·보험을 묶어, 이번 달 쓸 수 있는 금액과 위험 신호를 먼저 짚어 드립니다.</div>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button class="btn btn-back"    data-go="home">이전</button>
+      <button class="btn btn-primary" id="btn-next-1" disabled>다음</button>
+    </div>
+  </section>
+
+  <!-- 2. 지역·상권·업종 -->
+  <section class="panel" id="panel-area" style="display:none">
+    <div class="panel-head">
+      <h2>분석할 상권과 업종을 선택해주세요</h2>
+      <p>선택한 상권의 매출, 유동인구, 경쟁점, 생존율, 임대료 지표를 기반으로 컨설팅 결과를 제공합니다.</p>
+    </div>
+
+    <div class="form-grid">
+      <div class="form-item">
+        <label>자치구</label>
+        <select id="sel-district"><option value="">자치구 선택</option></select>
+      </div>
+      <div class="form-item">
+        <label>행정동 <span class="optional">선택</span></label>
+        <select id="sel-dong"><option value="">행정동 선택</option></select>
+      </div>
+      <div class="form-item">
+        <label>
+          상권 검색 <span class="optional">선택</span>
+          <span class="help-icon" data-help="search-meaning" title="검색 의미 보기">?</span>
+        </label>
+        <input type="text" id="inp-area-q" placeholder="예: 강남, 홍대, 종로">
+        <div class="search-help" id="search-help-tooltip" hidden></div>
+      </div>
+      <div class="form-item">
+        <label>상권</label>
+        <select id="sel-area"><option value="">상권 선택</option></select>
+      </div>
+      <div class="form-item">
+        <label>서비스 업종</label>
+        <select id="sel-service"><option value="">업종 선택</option></select>
+      </div>
+      <div class="form-item form-info">
+        <div class="form-tip-title">검색 예시</div>
+        <div class="chips">
+          <span class="chip" data-search="강남">강남 카페</span>
+          <span class="chip" data-search="홍대">홍대 음식점</span>
+          <span class="chip" data-search="종로">종로 미용실</span>
+          <span class="chip" data-search="이태원">이태원 술집</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 외부(카카오) 보조 검색: 목록에 없는 체인점·메뉴·실제 점포 -->
+    <div class="external-search-card">
+      <div class="external-head">
+        <div>
+          <div class="external-title">원하는 상권/체인점이 목록에 없으신가요?</div>
+          <div class="external-desc">
+            카카오 로컬 검색으로 <b>체인점명 · 가게 이름 · 특정 업종</b>을 찾고,
+            해당 위치에서 가장 가까운 공공 데이터 상권으로 자동 매칭합니다.
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="btn-toggle-external">고급 검색 열기</button>
+      </div>
+      <div class="external-body" id="external-body" hidden>
+        <div class="external-input">
+          <input type="text" id="inp-external-q" placeholder="예: 스타벅스 강남, 광화문 떡볶이, 청담동 디저트">
+          <button class="btn btn-primary btn-sm" id="btn-external-search">검색</button>
+        </div>
+        <div class="external-status" id="external-status"></div>
+        <div class="external-results external-results-2col">
+          <div class="external-col">
+            <div class="external-col-title">📍 카카오 로컬 점포</div>
+            <div id="external-places" class="external-list"></div>
+          </div>
+          <div class="external-col">
+            <div class="external-col-title">🎯 우리 데이터 매칭 상권</div>
+            <div id="external-matched" class="external-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-actions">
+      <button class="btn btn-back"    data-go="user-type">이전</button>
+      <button class="btn btn-primary" id="btn-next-2" disabled>다음</button>
+    </div>
+  </section>
+
+  <!-- 3. 사업 조건 입력 -->
+  <section class="panel" id="panel-finance" style="display:none">
+    <div class="panel-head">
+      <h2>사업 조건을 입력해주세요</h2>
+      <p>입력하지 않은 값은 상권 평균 또는 합성 점포 데이터로 자동 채워집니다.
+        잘 모르시면 우측의 <b>AI 추천값 자동 채우기</b>를 쓰거나, 아래 <b>조건 입력 건너뛰기</b>로 바로 분석할 수 있습니다.</p>
+    </div>
+
+    <div class="recommend-bar">
+      <div class="recommend-left">
+        <div class="recommend-title">🤖 우리 플랫폼이 추천드릴 수 있어요</div>
+        <div class="recommend-desc" id="recommend-desc">
+          선택한 상권·업종의 <b>실제 추정매출</b>과 <b>업종 평균 비율</b>을 결합해 사업 조건의 default를 자동 산출합니다.
+          입력 항목 옆에 <b>추천: ₩...</b> 와 데이터 출처가 표시됩니다.
+        </div>
+      </div>
+      <div class="recommend-right">
+        <button class="btn btn-primary btn-sm" id="btn-recommend">AI 추천값 자동 채우기</button>
+      </div>
+    </div>
+
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="simple">간편 입력</button>
+      <button class="mode-tab"        data-mode="detail">상세 입력</button>
+      <button class="mode-tab"        data-mode="sample">샘플 점포로 체험</button>
+    </div>
+
+    <div class="finance-form" id="finance-form">
+      <div class="form-grid finance-grid">
+        <div class="form-item"><label>월 평균 매출 (원)</label>            <input type="number" id="fin-monthly_sales" placeholder="예: 35000000"></div>
+        <div class="form-item"><label>월 임대료 (원)</label>                <input type="number" id="fin-rent"          placeholder="예: 4000000"></div>
+        <div class="form-item"><label>월 인건비 (원)</label>                <input type="number" id="fin-labor_cost"    placeholder="예: 10000000"></div>
+        <div class="form-item"><label>대출 잔액 (원)</label>                <input type="number" id="fin-loan_balance"  placeholder="예: 60000000"></div>
+        <div class="form-item"><label>현금 보유액 (원)</label>              <input type="number" id="fin-cash_balance"  placeholder="예: 15000000"></div>
+        <div class="form-item"><label>자기자본 (원)</label>                <input type="number" id="fin-own_capital"   placeholder="예: 30000000"></div>
+        <div class="form-item"><label>기타 월비용 (원)</label>              <input type="number" id="fin-misc_monthly_cost" placeholder="예: 500000"></div>
+        <div class="form-item detail-only" hidden><label>기타 초기비용 (원)</label>              <input type="number" id="fin-misc_initial_cost" placeholder="예: 3000000"></div>
+
+        <div class="form-item detail-only" hidden><label>금리 (%)</label>                          <input type="number" step="0.1" id="fin-interest_rate"      placeholder="예: 5.5"></div>
+        <div class="form-item detail-only" hidden><label>월 상환액 (원)</label>                    <input type="number"            id="fin-monthly_repayment"  placeholder="예: 800000"></div>
+        <div class="form-item detail-only" hidden><label>초기 투자 (원)</label>                    <input type="number"            id="fin-initial_investment" placeholder="예: 100000000"></div>
+        <div class="form-item detail-only" hidden><label>원가율 (0~1)</label>                       <input type="number" step="0.01" id="fin-cost_ratio"        placeholder="예: 0.35"></div>
+      </div>
+
+      <div class="form-tip">
+        <strong>안내</strong>
+        대출 가능 여부와 금리는 실제 심사·상담을 통해 확인해야 합니다.
+        본 서비스는 입력값을 외부로 전송하지 않으며, 단순 시뮬레이션 용도로만 활용됩니다.
+      </div>
+
+      <div class="finance-live-preview" id="finance-live-preview">
+        <div class="finance-live-head">
+          <h4>입력 즉시 미리보기</h4>
+          <p>자기자본·기타비용을 바꾸면 필요 대출액과 이자 추정 그래프가 즉시 반영됩니다.</p>
+        </div>
+        <div class="finance-live-kpis" id="finance-live-kpis"></div>
+        <div class="finance-live-grid">
+          <div class="fin-chart-card">
+            <div class="fin-chart-h">자기자본 vs 필요 대출(추정)</div>
+            <div class="fin-chart-canvas"><canvas id="fin-live-chart-gap"></canvas></div>
+          </div>
+          <div class="fin-chart-card">
+            <div class="fin-chart-h">월 비용·이자 시뮬레이션</div>
+            <div class="fin-chart-canvas"><canvas id="fin-live-chart-monthly"></canvas></div>
+          </div>
+        </div>
+        <div class="shinhan-rate-box" id="shinhan-rate-box">신한은행 금리 정보를 불러오는 중…</div>
+      </div>
+    </div>
+
+    <div class="panel-actions panel-actions-split">
+      <button class="btn btn-back"      data-go="area">이전</button>
+      <div class="panel-actions-right">
+        <button class="btn btn-ghost"    type="button" id="btn-skip-finance">조건 입력 건너뛰기</button>
+        <button class="btn btn-primary"   id="btn-analyze">분석 시작</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 운영 중 사업자 전용: 1) 데이터 연결 동의 -->
+  <section class="panel" id="panel-operating-connect" style="display:none">
+    <div class="panel-head">
+      <h2>신한 데이터로 우리 매장을 자동 진단합니다</h2>
+      <p>신한카드 매출, 신한은행 계좌·대출, 신한라이프/EZ손해보험 가입 정보를 연결하면 별도 입력 없이 매장의 경영 상태를 분석할 수 있습니다.</p>
+    </div>
+    <div class="op-consent-grid">
+      <label><input type="checkbox" checked> 신한카드 가맹점 매출 및 승인 데이터 조회</label>
+      <label><input type="checkbox" checked> 신한카드 사업자카드/법인카드 사용 데이터 조회</label>
+      <label><input type="checkbox" checked> 신한은행 사업자 계좌 잔액 및 입출금 데이터 조회</label>
+      <label><input type="checkbox" checked> 신한은행 대출 잔액, 금리, 상환액 조회</label>
+      <label><input type="checkbox" checked> 신한라이프 가입 보험 정보 조회</label>
+      <label><input type="checkbox" checked> 신한EZ손해보험 가입 보험 정보 조회</label>
+      <label><input type="checkbox" checked> 상권 비교 비식별 통계 데이터 활용</label>
+    </div>
+    <div class="panel-actions panel-actions-split">
+      <button class="btn btn-back" data-go="user-type">이전</button>
+      <div class="panel-actions-right">
+        <button class="btn btn-ghost" id="op-btn-connect-partial">일부만 연결하기</button>
+        <button class="btn btn-secondary" id="op-btn-connect-mock">목업 데이터로 체험하기</button>
+        <button class="btn btn-primary" id="op-btn-connect-all">전체 동의하고 자동 진단 시작</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 운영 중 사업자 전용: 2) 사업장 선택 -->
+  <section class="panel" id="panel-operating-store" style="display:none">
+    <div class="panel-head">
+      <h2>진단할 사업장을 선택해주세요</h2>
+      <p>신한카드 가맹점 또는 신한은행 사업자 계좌 기준 사업장을 자동으로 불러왔습니다.</p>
+    </div>
+    <div id="op-store-list" class="op-store-list">불러오는 중...</div>
+    <div class="panel-actions">
+      <button class="btn btn-back" data-go="operating-connect">이전</button>
+    </div>
+  </section>
+
+  <!-- 운영 중 사업자 전용: 3) 데이터 미리보기 + 부족 정보 -->
+  <section class="panel" id="panel-operating-preview" style="display:none">
+    <div class="panel-head">
+      <h2>신한에서 확인한 사업장 정보를 확인해주세요</h2>
+      <p>자동으로 불러온 데이터입니다. 부족한 정보만 확인하면 분석을 시작할 수 있습니다.</p>
+    </div>
+    <div id="op-preview-wrap"></div>
+    <div class="op-min-form">
+      <h4>부족한 정보만 확인해주세요</h4>
+      <div class="form-grid">
+        <div class="form-item">
+          <label>현재 가장 큰 고민</label>
+          <select id="op-main-concern">
+            <option>매출 감소</option><option>신규 고객 부족</option><option>단골 감소</option>
+            <option>원가 상승</option><option>인건비 부담</option><option>대출 상환 부담</option>
+            <option>현금 부족</option><option>보험/사고 리스크</option><option>경쟁점 증가</option>
+            <option>확장 고민</option><option selected>잘 모르겠음</option>
+          </select>
+        </div>
+        <div class="form-item"><label>타 금융기관 대출 여부</label><select id="op-external-loan"><option>없음</option><option>있음</option><option>잘 모르겠음</option></select></div>
+        <div class="form-item"><label>신한 외 보험 가입 여부</label><select id="op-external-ins"><option>없음</option><option>있음</option><option>잘 모르겠음</option></select></div>
+        <div class="form-item"><label>향후 3개월 큰 지출 계획</label><select id="op-expense-plan"><option>없음</option><option>인테리어</option><option>장비 교체</option><option>세금 납부</option><option>재고 매입</option><option>직원 채용</option><option>대출 일부 상환</option><option>보증금/권리금</option><option>기타</option></select></div>
+        <div class="form-item"><label>비교 상권 범위</label><select id="op-compare-range"><option value="500m">반경 500m</option><option value="1km">반경 1km</option><option value="dong">동일 행정동</option><option value="all">유사 상권 전체</option></select></div>
+      </div>
+    </div>
+    <div class="panel-actions panel-actions-split">
+      <button class="btn btn-back" data-go="operating-store">이전</button>
+      <button class="btn btn-primary" id="op-btn-analyze">AI 경영진단 시작</button>
+    </div>
+  </section>
+
+  <!-- 운영 중 사업자 전용: 4) 분석 로딩 -->
+  <section class="panel loading-panel" id="panel-operating-loading" style="display:none">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <h2>신한 데이터로 매장의 현재 위치를 분석하고 있습니다</h2>
+      <ul class="loading-checks op-loading-checks" id="op-loading-checks">
+        <li>신한카드 매출 추이 분석 중</li>
+        <li>상권 평균 매출과 비교 중</li>
+        <li>승인 건수와 객단가 변화 분석 중</li>
+        <li>신한카드 지출 구조 분석 중</li>
+        <li>신한은행 계좌 현금흐름 계산 중</li>
+        <li>대출 상환 부담 점검 중</li>
+        <li>보험 보장 공백 확인 중</li>
+        <li>사용 가능 금액 계산 중</li>
+        <li>이번 달 실행 플랜 생성 중</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 운영 중 사업자 전용: 5) 결과 -->
+  <section class="panel result-panel" id="panel-operating-result" style="display:none">
+    <div id="op-result-top"></div>
+    <div class="tabs op-tabs">
+      <button class="tab active" data-op-tab="summary">종합 요약</button>
+      <button class="tab" data-op-tab="sales">매출/상권 비교</button>
+      <button class="tab" data-op-tab="spending">카드 지출 분석</button>
+      <button class="tab" data-op-tab="cashflow">은행 현금흐름</button>
+      <button class="tab" data-op-tab="loan">대출/이자 점검</button>
+      <button class="tab" data-op-tab="insurance">보험 보장 점검</button>
+      <button class="tab" data-op-tab="cash">사용 가능 금액</button>
+      <button class="tab" data-op-tab="products">추천 상품군</button>
+      <button class="tab" data-op-tab="benchmark">주변 매장 벤치마킹</button>
+      <button class="tab" data-op-tab="plan">30일 실행 플랜</button>
+    </div>
+    <div id="op-tab-content"></div>
+    <div class="panel-actions">
+      <button class="btn btn-back" data-go="home">홈으로</button>
+      <button class="btn btn-primary" id="op-btn-save-report">리포트 저장</button>
+    </div>
+  </section>
+
+  <!-- 금융 점검 전용: 1) 데이터 연결 동의 -->
+  <section class="panel" id="panel-financial-connect" style="display:none">
+    <div class="panel-head">
+      <h2>신한 데이터로 금융 건강을 점검합니다</h2>
+      <p>사업자 계좌, 카드 지출, 대출, 보험 정보를 연결하면 현금흐름과 금융 위험을 자동으로 분석할 수 있습니다.</p>
+    </div>
+    <div class="op-consent-grid">
+      <label><input type="checkbox" checked> 신한은행 사업자 계좌 잔액 및 입출금 조회</label>
+      <label><input type="checkbox" checked> 신한은행 대출 정보 조회</label>
+      <label><input type="checkbox" checked> 신한카드 매출 및 카드 지출 조회</label>
+      <label><input type="checkbox" checked> 신한카드 결제 예정 금액 조회</label>
+      <label><input type="checkbox" checked> 신한라이프 가입 보험 정보 조회</label>
+      <label><input type="checkbox" checked> 신한EZ손해보험 가입 보험 정보 조회</label>
+      <label><input type="checkbox" checked> 금융 건강 진단 비식별 통계 활용</label>
+    </div>
+    <div class="panel-actions panel-actions-split">
+      <button class="btn btn-back" data-go="user-type">이전</button>
+      <div class="panel-actions-right">
+        <button class="btn btn-ghost" id="fc-btn-partial">일부만 연결하기</button>
+        <button class="btn btn-secondary" id="fc-btn-mock">목업 데이터로 체험하기</button>
+        <button class="btn btn-primary" id="fc-btn-all">전체 동의하고 금융 점검 시작</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 금융 점검 전용: 2) 사업장 선택 -->
+  <section class="panel" id="panel-financial-store" style="display:none">
+    <div class="panel-head">
+      <h2>금융 점검할 사업장을 선택해주세요</h2>
+      <p>사업장별 계좌 잔액, 대출 부담, 카드 매출/지출 연결 상태를 확인해 점검할 수 있습니다.</p>
+    </div>
+    <div id="fc-store-list" class="op-store-list">불러오는 중...</div>
+    <div class="panel-actions"><button class="btn btn-back" data-go="financial-connect">이전</button></div>
+  </section>
+
+  <!-- 금융 점검 전용: 3) 데이터 미리보기/최소입력 -->
+  <section class="panel" id="panel-financial-preview" style="display:none">
+    <div class="panel-head">
+      <h2>신한에서 확인한 금융 정보를 확인해주세요</h2>
+      <p>자동 조회된 금융정보를 확인하고, 신한 외 정보만 최소 입력해 주세요.</p>
+    </div>
+    <div id="fc-preview-wrap"></div>
+    <div class="op-min-form">
+      <h4>부족한 정보만 확인하면 금융 점검이 완료됩니다</h4>
+      <div class="form-grid">
+        <div class="form-item"><label>현재 가장 큰 금융 고민</label><select id="fc-concern"><option>현금 부족</option><option>대출 이자 부담</option><option>카드값 부담</option><option>세금 납부 걱정</option><option>매출은 있는데 돈이 안 남음</option><option>보험이 충분한지 모르겠음</option><option>비용 절감 필요</option><option>큰 지출 고민</option><option selected>잘 모르겠음</option></select></div>
+        <div class="form-item"><label>신한 외 대출 여부</label><select id="fc-external-loan"><option>없음</option><option>있음</option><option>잘 모르겠음</option></select></div>
+        <div class="form-item"><label>신한 외 보험 여부</label><select id="fc-external-ins"><option>없음</option><option>있음</option><option>잘 모르겠음</option></select></div>
+        <div class="form-item"><label>향후 3개월 큰 지출 계획</label><select id="fc-expense"><option>없음</option><option>인테리어</option><option>장비 교체</option><option>대량 재고 매입</option><option>직원 채용</option><option>세금 납부</option><option>대출 일부 상환</option><option>보증금/권리금</option><option>기타</option></select></div>
+        <div class="form-item"><label>이번 달 사용 금액</label><select id="fc-use-amount-band"><option>없음</option><option>100만 원 이하</option><option>100만~300만 원</option><option>300만~500만 원</option><option>500만~1,000만 원</option><option>1,000만 원 이상</option></select></div>
+        <div class="form-item"><label>사용 목적</label><select id="fc-use-purpose"><option>마케팅 광고비</option><option>인테리어</option><option>장비 교체</option><option>재고 매입</option><option>대출 일부 상환</option><option>직원 채용</option><option>비상금 유지</option><option>기타</option></select></div>
+      </div>
+    </div>
+    <div class="panel-actions panel-actions-split">
+      <button class="btn btn-back" data-go="financial-store">이전</button>
+      <button class="btn btn-primary" id="fc-btn-analyze">AI 금융 점검 시작</button>
+    </div>
+  </section>
+
+  <!-- 금융 점검 전용: 4) 로딩 -->
+  <section class="panel loading-panel" id="panel-financial-loading" style="display:none">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <h2>신한 데이터로 금융 건강을 분석하고 있습니다</h2>
+      <ul class="loading-checks op-loading-checks" id="fc-loading-checks">
+        <li>사업자 계좌 잔액 분석 중</li>
+        <li>다음 30일 예정 지출 계산 중</li>
+        <li>실제 사용 가능 금액 계산 중</li>
+        <li>월중 현금 부족 위험일 탐색 중</li>
+        <li>대출 상환 부담 점검 중</li>
+        <li>카드 지출 증가 항목 분석 중</li>
+        <li>보험 보장 공백 확인 중</li>
+        <li>매출 감소 스트레스 테스트 생성 중</li>
+        <li>이번 달 금융 개선 플랜 생성 중</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 금융 점검 전용: 5) 결과 -->
+  <section class="panel result-panel" id="panel-financial-result" style="display:none">
+    <div id="fc-result-top"></div>
+    <div class="tabs op-tabs">
+      <button class="tab active" data-fc-tab="summary">종합 요약</button>
+      <button class="tab" data-fc-tab="cash">사용 가능 금액</button>
+      <button class="tab" data-fc-tab="cashflow">현금흐름 캘린더</button>
+      <button class="tab" data-fc-tab="loan">대출/이자 점검</button>
+      <button class="tab" data-fc-tab="card">카드 지출 점검</button>
+      <button class="tab" data-fc-tab="insurance">보험 보장 점검</button>
+      <button class="tab" data-fc-tab="stress">매출 감소 스트레스 테스트</button>
+      <button class="tab" data-fc-tab="products">추천 상품군</button>
+      <button class="tab" data-fc-tab="plan">금융 개선 실행 플랜</button>
+    </div>
+    <div id="fc-tab-content"></div>
+    <div class="panel-actions">
+      <button class="btn btn-back" data-go="home">홈으로</button>
+      <button class="btn btn-primary" id="fc-btn-save-report">리포트 저장</button>
+    </div>
+  </section>
+
+  <!-- 4. 분석 로딩 -->
+  <section class="panel loading-panel" id="panel-loading" style="display:none">
+    <div class="loading-card">
+      <div class="loading-spinner"></div>
+      <h2>선택하신 상권과 업종을 분석하고 있습니다.</h2>
+      <p class="loading-sub">공공데이터 + 입력 사업 조건을 기반으로 컨설팅 점수를 산출합니다.</p>
+      <ul class="loading-checks" id="loading-checks">
+        <li>서울시 상권 추정매출</li>
+        <li>점포 수 및 개·폐업 현황</li>
+        <li>길단위 유동인구</li>
+        <li>상주인구·직장인구</li>
+        <li>집객시설</li>
+        <li>상권변화지표</li>
+        <li>업종 생존율</li>
+        <li>주변 경쟁점</li>
+        <li>임대료·부동산 지표</li>
+        <li>입력한 사업 조건</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 5. 결과 컨설팅 대시보드 -->
+  <section class="panel result-panel" id="panel-result" style="display:none">
+    <!-- 결과 상단 요약 -->
+    <div class="result-summary" id="result-summary"></div>
+
+    <!-- 핵심 지표 카드 -->
+    <div class="score-grid" id="score-grid"></div>
+    <p class="score-grid-hint">각 지표 카드에 마우스를 올리거나 우측 <b>i</b> 버튼에 포커스하면 산출 방법·점수 해석을 볼 수 있습니다.</p>
+
+    <!-- 탭 -->
+    <div class="tabs">
+      <button class="tab active" data-tab="overview">상권 요약</button>
+      <button class="tab"        data-tab="trend">매출·점포 추이</button>
+      <button class="tab"        data-tab="map">경쟁점 지도</button>
+      <button class="tab"        data-tab="finance">자금·손익분기점</button>
+      <button class="tab"        data-tab="services">신한 서비스 연결</button>
+      <button class="tab"        data-tab="report">AI 리포트</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-overview"></div>
+    <div class="tab-panel"        id="tab-trend"   style="display:none"></div>
+    <div class="tab-panel"        id="tab-map"     style="display:none"></div>
+    <div class="tab-panel"        id="tab-finance" style="display:none"></div>
+    <div class="tab-panel"        id="tab-services" style="display:none"></div>
+    <div class="tab-panel"        id="tab-report"  style="display:none"></div>
+
+    <div class="panel-actions">
+      <button class="btn btn-back"    data-go="finance">조건 다시 입력</button>
+      <button class="btn btn-ghost"   data-go="home">처음으로</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="app-footer">
+  <div>데이터 출처: 서울시 상권분석서비스 · 소상공인시장진흥공단 · KOSIS · 국토교통부 · 한국부동산원</div>
+  <div class="muted">본 서비스의 결과는 공공데이터 기반 참고용이며, 실제 금융상품 가입은 전문가 상담을 권장합니다.</div>
+</footer>
+
+<div id="shinhan-cta-modal" class="shinhan-modal" aria-hidden="true" role="dialog" aria-modal="true">
+  <div class="shinhan-modal-backdrop" aria-hidden="true"></div>
+  <div class="shinhan-modal-dialog">
+    <button type="button" class="shinhan-modal-close" data-shinhan-modal-close aria-label="닫기">&times;</button>
+    <h3 class="shinhan-modal-title" data-shinhan-modal-headline></h3>
+    <div data-shinhan-modal-context></div>
+    <p class="shinhan-modal-intro" data-shinhan-modal-intro></p>
+    <div class="shinhan-modal-checklist-wrap">
+      <div class="shinhan-modal-tools">
+        <button type="button" class="btn btn-ghost btn-sm" data-shinhan-copy-checklist>체크리스트 복사</button>
+      </div>
+      <ul class="shinhan-modal-checklist" data-shinhan-modal-checklist></ul>
+    </div>
+    <div class="shinhan-modal-actions">
+      <a class="btn btn-primary" data-shinhan-modal-primary href="#" target="_blank" rel="noopener noreferrer">공식 사이트</a>
+      <a class="btn btn-secondary" data-shinhan-modal-phone href="tel:" style="display:none">전화</a>
+    </div>
+    <div class="shinhan-modal-extras" data-shinhan-modal-extras style="display:none"></div>
+    <p class="shinhan-modal-note" data-shinhan-modal-note></p>
+    <button type="button" class="btn btn-back shinhan-modal-footer-close" onclick="window.closeShinhanCtaModal && window.closeShinhanCtaModal()">닫기</button>
+  </div>
+</div>
+
+{# 경쟁점 지도는 Leaflet/OSM 전용 — 브라우저 카카오 Maps SDK 미로드 #}
+<script defer src="/static/js/shinhan_cta_registry.js?v=20260430h"></script>
+<script defer src="/static/js/app.js?v=20260428funds"></script>
+<script defer src="/static/js/operating_business.js?v=20260430planreport"></script>
+<script defer src="/static/js/financial_check.js?v=20260430f"></script>
+</body>
+</html>
