@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 import uvicorn
 
-from routers import areas, dashboard, map_api, report, recommend, external, operating_business
+from routers import areas, dashboard, map_api, map_explorer, report, recommend, external, operating_business, account
 
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
@@ -24,6 +24,10 @@ def _kakao_js_key() -> str:
         os.getenv("KAKAO_JAVA_SCRIPT_KEY", "").strip()
         or os.getenv("KAKAO_MAP_APP_KEY", "").strip()
     )
+
+
+def _google_client_id() -> str:
+    return os.getenv("GOOGLE_CLIENT_ID", "").strip()
 
 
 app = FastAPI(
@@ -38,10 +42,12 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(areas.router,     prefix="/api",      tags=["areas"])
 app.include_router(dashboard.router, prefix="/api",      tags=["dashboard"])
 app.include_router(map_api.router,   prefix="/api",      tags=["map"])
+app.include_router(map_explorer.router, prefix="/api/map-explorer", tags=["map-explorer"])
 app.include_router(report.router,    prefix="/api",      tags=["report"])
 app.include_router(recommend.router, prefix="/api",      tags=["recommend"])
 app.include_router(external.router,  prefix="/api",      tags=["external"])
 app.include_router(operating_business.router, prefix="/api", tags=["operating-business"])
+app.include_router(account.router, prefix="/api", tags=["account"])
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -49,7 +55,11 @@ async def index(request: Request):
     # 카카오맵은 HTML에서 sdk.js를 먼저 로드하는 방식이 동적 삽입보다 안정적입니다.
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "kakao_js_key": _kakao_js_key()},
+        {
+            "request": request,
+            "kakao_js_key": _kakao_js_key(),
+            "google_client_id": _google_client_id(),
+        },
     )
 
 

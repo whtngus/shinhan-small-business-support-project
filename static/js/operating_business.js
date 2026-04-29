@@ -1276,5 +1276,6 @@
     document.getElementById('op-btn-save-report')?.addEventListener('click', saveReport);
   }
 
+  window.openOperatingStoreSelector = openStoreSelector;
   document.addEventListener('DOMContentLoaded', init);
 })();

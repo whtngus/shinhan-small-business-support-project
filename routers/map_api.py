@@ -256,9 +256,9 @@ def get_competitors(area_code: str, service_name: str = "", radius: int = 500,
     else:
         in_primary["is_same"] = same_mask_all.loc[in_primary.index]
 
-    # 동일 업종은 모두, 그외는 거리 가까운 순으로 보충 (총 500개 캡)
+    # 동일 업종은 모두, 그외는 거리 가까운 순으로 보충 (총 300개 캡)
     same = in_primary[in_primary["is_same"]].sort_values("_dist")
-    other = in_primary[~in_primary["is_same"]].sort_values("_dist").head(max(0, 500 - len(same)))
+    other = in_primary[~in_primary["is_same"]].sort_values("_dist").head(max(0, 300 - len(same)))
     pick = pd.concat([same, other]).sort_values("_dist")
 
     stores = _stores_records_from_df(pick)

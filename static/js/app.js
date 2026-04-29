@@ -33,10 +33,26 @@ const State = {
   competitorExpansion: null,
   radiusExpansion: null,
   loanRates: null,
+  account: null,                       // { provider, id, name }
+  /** 시뮬레이션 기본값 자동 채움 후 설명 패널용 */
+  financeRecommendationApplied: false,
+  financeRecommendationBaseline: null,
+  /** 지도 기반 탐색에서 진단으로 넘길 때 좌표·반경·업종 필터 */
+  mapExplorerContext: null,
+  /** 조건 입력 화면 상단 배너용 요약 */
+  mapExplorerSummary: null,
 };
+
+const ACCOUNT_KEY = 'shinhan.account.v1';
+const SAVED_KEY_PREFIX = 'shinhan.savedProfiles.';
+const HISTORY_KEY_PREFIX = 'shinhan.analysisHistory.';
+const ACCOUNT_SYNC_ON = true;
+const MAP_MARKER_LIMIT_LEAFLET = 220;
+const MAP_MARKER_LIMIT_KAKAO = 160;
 
 // ── 초기 진입 ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  initAccountFeatures();
   initHomeButtons();
   initUserTypeStep();
   initAreaStep();
@@ -47,10 +63,482 @@ document.addEventListener('DOMContentLoaded', () => {
   goStep('home');
 });
 
+function getSavedStorageKey() {
+  const id = State.account?.id;
+  return id ? `${SAVED_KEY_PREFIX}${id}` : '';
+}
+
+function loadSavedProfiles() {
+  const key = getSavedStorageKey();
+  if (!key) return [];
+  try {
+    const raw = localStorage.getItem(key);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function getHistoryStorageKey() {
+  const id = State.account?.id;
+  return id ? `${HISTORY_KEY_PREFIX}${id}` : '';
+}
+
+function loadAnalysisHistory() {
+  const key = getHistoryStorageKey();
+  if (!key) return [];
+  try {
+    const raw = localStorage.getItem(key);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function syncLoginAccount() {
+  if (!ACCOUNT_SYNC_ON || !State.account?.id) return;
+  if (State.account.provider !== 'google') return;
+  try {
+    await fetchJson('/api/account/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        account_id: State.account.id,
+        provider: 'google',
+        account_name: State.account.name || State.account.id,
+      }),
+    });
+  } catch (_) {}
+}
+
+async function pullAccountDataFromServer() {
+  if (!ACCOUNT_SYNC_ON || !State.account?.id) return;
+  try {
+    const q = encodeURIComponent(State.account.id);
+    const [saved, history] = await Promise.all([
+      fetchJson(`/api/account/saved-profiles?account_id=${q}`),
+      fetchJson(`/api/account/history?account_id=${q}`),
+    ]);
+    if (Array.isArray(saved?.rows)) {
+      const key = getSavedStorageKey();
+      if (key) localStorage.setItem(key, JSON.stringify(saved.rows));
+    }
+    if (Array.isArray(history?.rows)) {
+      const key = getHistoryStorageKey();
+      if (key) localStorage.setItem(key, JSON.stringify(history.rows));
+    }
+  } catch (_) {}
+}
+
+function pushSavedProfilesToServer(rows) {
+  if (!ACCOUNT_SYNC_ON || !State.account?.id) return;
+  const q = encodeURIComponent(State.account.id);
+  fetchJson(`/api/account/saved-profiles?account_id=${q}`, {
+    method: 'PUT',
+    body: JSON.stringify({ rows: rows || [] }),
+  }).catch(() => {});
+}
+
+function pushHistoryToServer(rows) {
+  if (!ACCOUNT_SYNC_ON || !State.account?.id) return;
+  const q = encodeURIComponent(State.account.id);
+  fetchJson(`/api/account/history?account_id=${q}`, {
+    method: 'PUT',
+    body: JSON.stringify({ rows: rows || [] }),
+  }).catch(() => {});
+}
+
+function writeAnalysisHistory(rows) {
+  const key = getHistoryStorageKey();
+  if (!key) return;
+  const safeRows = rows || [];
+  localStorage.setItem(key, JSON.stringify(safeRows));
+  pushHistoryToServer(safeRows);
+}
+
+function writeSavedProfiles(rows) {
+  const key = getSavedStorageKey();
+  if (!key) return;
+  const safeRows = rows || [];
+  localStorage.setItem(key, JSON.stringify(safeRows));
+  pushSavedProfilesToServer(safeRows);
+}
+
+function buildSnapshot() {
+  return {
+    id: `p_${Date.now()}`,
+    title: `${State.area_name || '미지정 상권'} · ${State.service_name || '미지정 업종'}`,
+    created_at: new Date().toISOString(),
+    payload: {
+      user_type: State.user_type || '',
+      district: State.district || '',
+      dong: State.dong || '',
+      area_code: State.area_code || '',
+      area_name: State.area_name || '',
+      service_name: State.service_name || '',
+      finance_mode: State.finance_mode || 'simple',
+      finance: readFinance(),
+    },
+  };
+}
+
+function buildAnalysisHistoryRow(result) {
+  return {
+    id: `h_${Date.now()}`,
+    created_at: new Date().toISOString(),
+    favorite: false,
+    note: '',
+    payload: {
+      user_type: State.user_type || '',
+      district: State.district || '',
+      dong: State.dong || '',
+      area_code: State.area_code || '',
+      area_name: State.area_name || '',
+      service_name: State.service_name || '',
+      finance_mode: State.finance_mode || 'simple',
+      finance: State.finance || {},
+    },
+    result_snapshot: result || null,
+    headline: `${State.area_name || '미지정 상권'} · ${State.service_name || '미지정 업종'}`,
+  };
+}
+
+function autoSaveAnalysisHistory(result) {
+  if (!State.account || !result) return;
+  const rows = loadAnalysisHistory();
+  rows.unshift(buildAnalysisHistoryRow(result));
+  writeAnalysisHistory(rows.slice(0, 30));
+}
+
+function loadHistoryToDashboard(row) {
+  if (!row?.result_snapshot) return;
+  const p = row.payload || {};
+  State.user_type = p.user_type || '';
+  State.district = p.district || '';
+  State.dong = p.dong || '';
+  State.area_code = p.area_code || '';
+  State.area_name = p.area_name || '';
+  State.service_name = p.service_name || '';
+  State.finance_mode = p.finance_mode || 'simple';
+  State.finance = p.finance || {};
+  State.result = row.result_snapshot;
+  renderResult(State.result);
+  goStep('result');
+}
+
+function renderAccountHistory() {
+  const wrap = document.getElementById('account-history');
+  if (!wrap) return;
+  if (!State.account) {
+    wrap.innerHTML = '';
+    return;
+  }
+  const rows = loadAnalysisHistory();
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="muted">아직 조회 이력이 없습니다. 분석을 실행하면 자동으로 쌓입니다.</div>';
+    return;
+  }
+  wrap.innerHTML = rows.map(r => `
+    <div class="saved-profile-item">
+      <div class="saved-profile-meta">
+        <b>${r.favorite ? '★ ' : ''}${r.headline || '-'}</b><br>
+        ${r.payload?.user_type || '-'} · ${new Date(r.created_at).toLocaleString('ko-KR')}<br>
+        ${(r.result_snapshot?.final_result?.score != null) ? `종합점수: ${r.result_snapshot.final_result.score}점` : ''}
+      </div>
+      <div class="saved-profile-actions">
+        <button class="btn btn-primary btn-sm" data-open-history="${r.id}">대시보드 열기</button>
+        <button class="btn btn-secondary btn-sm" data-fav-history="${r.id}">${r.favorite ? '즐겨찾기 해제' : '즐겨찾기'}</button>
+        <button class="btn btn-back btn-sm" data-del-history="${r.id}">삭제</button>
+      </div>
+      <input class="saved-profile-note" type="text" data-note-history="${r.id}" value="${escapeHtml(r.note || '')}" placeholder="메모 입력 후 Enter">
+    </div>
+  `).join('');
+
+  wrap.querySelectorAll('[data-open-history]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = rows.find(x => x.id === btn.dataset.openHistory);
+      if (row) loadHistoryToDashboard(row);
+    });
+  });
+  wrap.querySelectorAll('[data-fav-history]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = rows.map(x => x.id === btn.dataset.favHistory ? { ...x, favorite: !x.favorite } : x)
+        .sort((a, b) => Number(b.favorite) - Number(a.favorite) || String(b.created_at).localeCompare(String(a.created_at)));
+      writeAnalysisHistory(next);
+      renderAccountHistory();
+    });
+  });
+  wrap.querySelectorAll('[data-del-history]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      writeAnalysisHistory(rows.filter(x => x.id !== btn.dataset.delHistory));
+      renderAccountHistory();
+    });
+  });
+  wrap.querySelectorAll('[data-note-history]').forEach(input => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const next = rows.map(x => x.id === input.dataset.noteHistory ? { ...x, note: input.value || '' } : x);
+      writeAnalysisHistory(next);
+      renderAccountHistory();
+    });
+  });
+}
+
+function restoreSnapshot(snapshot) {
+  const p = snapshot?.payload || {};
+  State.user_type = p.user_type || '';
+  State.district = p.district || '';
+  State.dong = p.dong || '';
+  State.area_code = p.area_code || '';
+  State.area_name = p.area_name || '';
+  State.service_name = p.service_name || '';
+  State.finance_mode = p.finance_mode || 'simple';
+  State.finance = p.finance || {};
+
+  selectUserTypeCard(State.user_type || null);
+  if (State.user_type) {
+    goStep('area');
+    hydrateAreaSelectionFromState().then(() => {
+      goStep('finance');
+      document.querySelectorAll('#panel-finance .mode-tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.mode === State.finance_mode));
+      applyFinanceMode(State.finance_mode);
+      Object.entries(State.finance || {}).forEach(([k, v]) => {
+        const el = document.getElementById('fin-' + k);
+        if (el) el.value = v;
+      });
+      refreshFinanceLivePreview();
+      alert('저장된 정보를 불러왔습니다. 바로 분석을 진행할 수 있습니다.');
+    });
+  } else {
+    goStep('user-type');
+  }
+}
+
+async function hydrateAreaSelectionFromState() {
+  await loadDistricts(true);
+  const distSel = document.getElementById('sel-district');
+  if (State.district && [...distSel.options].some(o => o.value === State.district)) {
+    distSel.value = State.district;
+    await onDistrictChange();
+  }
+  const dongSel = document.getElementById('sel-dong');
+  if (State.dong && [...dongSel.options].some(o => o.value === State.dong)) {
+    dongSel.value = State.dong;
+    await onDongChange();
+  }
+  const areaSel = document.getElementById('sel-area');
+  if (State.area_code) {
+    if (![...areaSel.options].some(o => o.value === State.area_code)) {
+      const o = document.createElement('option');
+      o.value = State.area_code;
+      o.textContent = `${State.area_name || State.area_code} (저장값)`;
+      o.dataset.name = State.area_name || '';
+      areaSel.appendChild(o);
+    }
+    areaSel.value = State.area_code;
+    await onAreaChange();
+  }
+  const serviceSel = document.getElementById('sel-service');
+  if (State.service_name) {
+    if (![...serviceSel.options].some(o => o.value === State.service_name)) {
+      const o = document.createElement('option');
+      o.value = State.service_name;
+      o.textContent = `${State.service_name} (저장값)`;
+      serviceSel.appendChild(o);
+    }
+    serviceSel.value = State.service_name;
+    onServiceChange();
+  }
+}
+
+function renderSavedProfiles() {
+  const wrap = document.getElementById('saved-profiles');
+  const status = document.getElementById('account-status');
+  const panelBtn = document.getElementById('btn-account-panel');
+  if (!wrap || !status) return;
+  if (!State.account) {
+    if (panelBtn) panelBtn.textContent = '로그인 · 내 계정';
+    status.textContent = '로그인되지 않았습니다.';
+    wrap.innerHTML = '';
+    return;
+  }
+  if (panelBtn) panelBtn.textContent = `${State.account.name} · 내 계정`;
+  const rows = loadSavedProfiles();
+  status.textContent = `${State.account.name} 님으로 로그인됨 · 저장 ${rows.length}건 · 분석 시 조회 이력이 자동 저장됩니다.`;
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="muted">저장된 정보가 없습니다. 사업 조건 화면에서 "내 정보 저장"을 눌러주세요.</div>';
+    return;
+  }
+  wrap.innerHTML = rows.map(r => `
+    <div class="saved-profile-item">
+      <div class="saved-profile-meta">
+        <b>${r.title || '저장 항목'}</b><br>
+        ${r.payload?.user_type || '-'} · ${r.payload?.district || '-'} ${r.payload?.dong || ''}<br>
+        저장시각: ${new Date(r.created_at).toLocaleString('ko-KR')}
+      </div>
+      <div class="saved-profile-actions">
+        <button class="btn btn-primary btn-sm" data-load-profile="${r.id}">불러오기</button>
+        <button class="btn btn-back btn-sm" data-del-profile="${r.id}">삭제</button>
+      </div>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-load-profile]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = rows.find(x => x.id === btn.dataset.loadProfile);
+      if (row) restoreSnapshot(row);
+    });
+  });
+  wrap.querySelectorAll('[data-del-profile]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const next = rows.filter(x => x.id !== btn.dataset.delProfile);
+      writeSavedProfiles(next);
+      renderSavedProfiles();
+    });
+  });
+  renderAccountHistory();
+}
+
+function saveCurrentProfile() {
+  if (!State.account) {
+    alert('먼저 우측 상단에서 Google 로그인을 해주세요.');
+    return;
+  }
+  if (!State.user_type || !State.area_code || !State.service_name) {
+    alert('저장하려면 사용자 유형/상권/업종 선택이 필요합니다.');
+    return;
+  }
+  const rows = loadSavedProfiles();
+  rows.unshift(buildSnapshot());
+  writeSavedProfiles(rows.slice(0, 10));
+  renderSavedProfiles();
+  alert('내 정보로 저장했습니다. 홈 화면에서 불러올 수 있습니다.');
+}
+
+async function afterAccountLogin() {
+  localStorage.setItem(ACCOUNT_KEY, JSON.stringify(State.account));
+  await syncLoginAccount();
+  await pullAccountDataFromServer();
+  renderSavedProfiles();
+  goStep('home');
+}
+
+function quickGoOperating() {
+  if (!State.account) {
+    alert('먼저 로그인해주세요.');
+    return;
+  }
+  if (typeof window.openOperatingStoreSelector === 'function') {
+    window.openOperatingStoreSelector();
+    return;
+  }
+  goStep('operating-connect');
+}
+
+function quickGoFinancial() {
+  if (!State.account) {
+    alert('먼저 로그인해주세요.');
+    return;
+  }
+  if (typeof window.openFinancialStoreList === 'function') {
+    window.openFinancialStoreList();
+    return;
+  }
+  goStep('financial-connect');
+}
+
+async function loginWithGoogleToken(idToken) {
+  const res = await fetchJson('/api/account/google-login', {
+    method: 'POST',
+    body: JSON.stringify({ id_token: idToken }),
+  });
+  State.account = res.account || null;
+  if (!State.account?.id) throw new Error('google login failed');
+  await afterAccountLogin();
+}
+
+function initGoogleButton() {
+  const clientId = String(window.__GOOGLE_CLIENT_ID__ || '').trim();
+  const wrap = document.getElementById('google-login-button');
+  if (!wrap) return;
+
+  if (!clientId || !window.google?.accounts?.id) return;
+  window.google.accounts.id.initialize({
+    client_id: clientId,
+    callback: async (resp) => {
+      try {
+        await loginWithGoogleToken(resp.credential);
+      } catch (e) {
+        alert('Google 로그인에 실패했습니다.');
+      }
+    },
+    auto_select: false,
+    cancel_on_tap_outside: true,
+  });
+  wrap.innerHTML = '';
+  window.google.accounts.id.renderButton(wrap, {
+    theme: 'outline',
+    size: 'medium',
+    type: 'standard',
+    shape: 'pill',
+    text: 'signin_with',
+    width: 220,
+  });
+}
+
+async function initAccountFeatures() {
+  const panelBtn = document.getElementById('btn-account-panel');
+  const pop = document.getElementById('account-popover');
+  panelBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!pop) return;
+    const isHidden = pop.hasAttribute('hidden');
+    if (isHidden) pop.removeAttribute('hidden');
+    else pop.setAttribute('hidden', '');
+  });
+  document.addEventListener('click', (e) => {
+    if (!pop || !panelBtn) return;
+    if (pop.hasAttribute('hidden')) return;
+    if (pop.contains(e.target) || panelBtn.contains(e.target)) return;
+    pop.setAttribute('hidden', '');
+  });
+
+  try {
+    const raw = localStorage.getItem(ACCOUNT_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.provider === 'google' && parsed?.id) State.account = parsed;
+      else localStorage.removeItem(ACCOUNT_KEY);
+    }
+  } catch (_) {}
+
+  document.getElementById('btn-logout-account')?.addEventListener('click', () => {
+    try {
+      window.google?.accounts?.id?.disableAutoSelect?.();
+    } catch (_) {}
+    State.account = null;
+    localStorage.removeItem(ACCOUNT_KEY);
+    renderSavedProfiles();
+  });
+  document.getElementById('btn-quick-operating')?.addEventListener('click', quickGoOperating);
+  document.getElementById('btn-quick-financial')?.addEventListener('click', quickGoFinancial);
+  document.getElementById('btn-save-profile')?.addEventListener('click', saveCurrentProfile);
+  initGoogleButton();
+  setTimeout(initGoogleButton, 800);
+  setTimeout(initGoogleButton, 1800);
+  if (State.account) {
+    await syncLoginAccount();
+    await pullAccountDataFromServer();
+  }
+  renderSavedProfiles();
+}
+
 // ── 단계 전환 ───────────────────────────────────────────────────────────────
 function goStep(step) {
   State.step = step;
   ['home', 'user-type', 'area', 'finance', 'loading', 'result',
+   'map-explorer',
    'operating-connect', 'operating-store', 'operating-preview', 'operating-loading', 'operating-result',
    'financial-connect', 'financial-store', 'financial-preview', 'financial-loading', 'financial-result'].forEach(s => {
     const el = document.getElementById('panel-' + s);
@@ -63,7 +551,7 @@ function goStep(step) {
     'operating-connect': 2, 'operating-store': 3, 'operating-preview': 4, 'operating-loading': 4, 'operating-result': 5,
     'financial-connect': 2, 'financial-store': 3, 'financial-preview': 4, 'financial-loading': 4, 'financial-result': 5,
   }[step] || 0;
-  stepper.style.display = (step === 'home') ? 'none' : 'flex';
+  stepper.style.display = (step === 'home' || step === 'map-explorer') ? 'none' : 'flex';
   stepper.querySelectorAll('.step').forEach(el => {
     const n = Number(el.dataset.step);
     el.classList.toggle('active', n === stepIdx);
@@ -72,14 +560,60 @@ function goStep(step) {
 
   if (step === 'area') loadDistricts();
 
+  if (step === 'map-explorer') {
+    requestAnimationFrame(() => {
+      if (typeof window.mapExplorerOnShown === 'function') window.mapExplorerOnShown();
+    });
+  }
+
+  if (step === 'finance') updateMapExplorerFinanceBanner();
+
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function updateMapExplorerFinanceBanner() {
+  const box = document.getElementById('finance-map-selection-banner');
+  if (!box) return;
+  const s = State.mapExplorerSummary;
+  if (!s || s.lat == null || !Number.isFinite(Number(s.lat))) {
+    box.hidden = true;
+    box.innerHTML = '';
+    return;
+  }
+  box.hidden = false;
+  const svc =
+    s.service_name ||
+    MAP_EXPLORER_SERVICE_NAME[s.industryKey || 'all'] ||
+    MAP_EXPLORER_SERVICE_NAME.all;
+  box.innerHTML = `
+    <div class="finance-map-banner-inner">
+      <div class="finance-map-banner-title">지도에서 선택한 위치</div>
+      <ul class="finance-map-banner-list">
+        <li><strong>선택 상권</strong>: ${escapeHtml(s.area_name || '(다음 단계에서 선택 가능)')}</li>
+        <li><strong>선택 업종</strong>: ${escapeHtml(svc)}</li>
+        <li><strong>기준 반경</strong>: ${escapeHtml(String(s.radius_m || ''))}m</li>
+        <li><strong>반경 내 유사 업종</strong>: ${s.same_or_similar_stores != null ? escapeHtml(String(s.same_or_similar_stores)) + '개' : '—'}</li>
+        <li><strong>경쟁 강도</strong>: ${escapeHtml(s.density_level || '—')}</li>
+        <li class="muted">좌표: ${Number(s.lat).toFixed(5)}, ${Number(s.lon).toFixed(5)}</li>
+      </ul>
+    </div>`;
 }
 
 // ── 홈 화면 ─────────────────────────────────────────────────────────────────
 function initHomeButtons() {
   document.querySelector('[data-action="start-create"]').addEventListener('click', goToConsultingEntry);
-  document.querySelector('[data-action="start-operate"]').addEventListener('click', goToConsultingEntry);
+  document.querySelector('[data-action="start-operate"]').addEventListener('click', () => {
+    if (State.account && typeof window.openOperatingStoreSelector === 'function') {
+      window.openOperatingStoreSelector();
+    } else {
+      goToConsultingEntry();
+    }
+  });
+  document.querySelector('[data-action="start-financial"]').addEventListener('click', quickGoFinancial);
   document.querySelector('[data-action="open-samples"]').addEventListener('click', loadSamples);
+  document.querySelectorAll('[data-action="open-map-explorer"]').forEach((btn) => {
+    btn.addEventListener('click', () => goStep('map-explorer'));
+  });
 }
 
 /** 창업/운영 두 버튼 동일: 유형 선택 화면으로만 이동 (자동 선택 없음) */
@@ -152,6 +686,7 @@ async function runSampleCase(caseId) {
     preloadMapDuringAnalysis();
     const result = await analyzeNow(State);
     State.result = result;
+    autoSaveAnalysisHistory(result);
     renderResult(result);
     goStep('result');
   } catch (e) {
@@ -487,7 +1022,7 @@ async function applyRecommendation() {
   const btn = document.getElementById('btn-recommend');
   const desc = document.getElementById('recommend-desc');
   if (!State.area_code) { alert('상권을 먼저 선택해주세요.'); return; }
-  btn.disabled = true; const oldText = btn.textContent; btn.textContent = '추천값 계산 중…';
+  btn.disabled = true; const oldText = btn.textContent; btn.textContent = '시뮬레이션 기본값 계산 중…';
   try {
     const params = new URLSearchParams({
       area_code: State.area_code,
@@ -508,9 +1043,13 @@ async function applyRecommendation() {
       const el = document.getElementById('fin-' + k);
       if (el && val !== undefined && val !== null && val !== '') el.value = val;
     });
+
+    State.financeRecommendationApplied = true;
+    State.financeRecommendationBaseline = JSON.parse(JSON.stringify(readFinance()));
+
     refreshFinanceLivePreview();
 
-    // 각 입력 옆에 추천 hint 표시
+    // 각 입력 옆에 시뮬 기본값 hint 표시
     Object.entries(v).forEach(([k, val]) => {
       const el = document.getElementById('fin-' + k);
       if (!el) return;
@@ -525,17 +1064,17 @@ async function applyRecommendation() {
       const src = (r.sources || {})[k] || '';
       const formatted = (k === 'cost_ratio')
         ? `${val}` :  (k === 'interest_rate' ? `${val}%` : fmtMoney(val));
-      hint.innerHTML = `<span class="rec-tag">추천값</span> ${formatted}<br><span class="rec-src">${src}</span>`;
+      hint.innerHTML = `<span class="rec-tag">시뮬 기본값</span> ${formatted}<br><span class="rec-src">${escapeHtml(src)}</span>`;
     });
 
     const conf = { high: '높음', medium: '보통', low: '낮음 (합성 데이터 기반)' }[r.confidence] || r.confidence;
     desc.innerHTML = `
-      <b>${r.area_name || State.area_code} · ${r.service_name || '-'}</b> 기준 추천값을 자동 채웠습니다.
-      신뢰도: <b>${conf}</b>. 상세 데이터 출처는 각 항목 아래 hint를 참고하세요.
-      필요 시 직접 수정 후 <b>분석 시작</b>을 누르세요.`;
+      <b>${r.area_name || State.area_code} · ${r.service_name || '-'}</b> 기준 시뮬레이션 기본값을 채웠습니다.
+      신뢰도: <b>${conf}</b>. 산식·근거는 아래 카드를 참고하고, 항목별 출처는 입력란 아래를 보세요.
+      수정하면 미리보기와 참고 수치가 함께 바뀝니다. 이어서 <b>분석 시작</b>을 누르세요.`;
   } catch (e) {
     console.error(e);
-    alert('추천값 계산에 실패했습니다.');
+    alert('시뮬레이션 기본값 계산에 실패했습니다.');
   } finally {
     btn.disabled = false; btn.textContent = oldText;
   }
@@ -558,6 +1097,8 @@ function clearFinanceForm() {
   ['monthly_sales','rent','labor_cost','loan_balance','cash_balance','own_capital',
    'interest_rate','monthly_repayment','initial_investment','cost_ratio','misc_monthly_cost','misc_initial_cost']
    .forEach(k => { const el = document.getElementById('fin-' + k); if (el) el.value = ''; });
+  State.financeRecommendationApplied = false;
+  State.financeRecommendationBaseline = null;
   refreshFinanceLivePreview();
 }
 
@@ -572,6 +1113,8 @@ function fillFinanceSample() {
   Object.entries(sample).forEach(([k, v]) => {
     const el = document.getElementById('fin-' + k); if (el) el.value = v;
   });
+  State.financeRecommendationApplied = false;
+  State.financeRecommendationBaseline = null;
   refreshFinanceLivePreview();
 }
 
@@ -645,6 +1188,205 @@ function buildFinancePreviewModel(input) {
   };
 }
 
+const FIN_REC_SNAPSHOT_KEYS = [
+  'monthly_sales', 'rent', 'labor_cost', 'loan_balance', 'cash_balance', 'own_capital',
+  'interest_rate', 'monthly_repayment', 'initial_investment', 'cost_ratio',
+  'misc_monthly_cost', 'misc_initial_cost',
+];
+
+function financeFieldNearEqual(a, b, key) {
+  if (a === '' || a === undefined || a === null) {
+    return b === '' || b === undefined || b === null;
+  }
+  if (b === '' || b === undefined || b === null) return false;
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return String(a) === String(b);
+  if (key === 'cost_ratio') return Math.abs(na - nb) < 0.0001;
+  return Math.abs(na - nb) < 1;
+}
+
+function countFinanceDiff(baseline, current) {
+  const baselineObj = baseline || {};
+  const currentObj = current || {};
+  let changed = 0;
+  let tracked = 0;
+  FIN_REC_SNAPSHOT_KEYS.forEach((k) => {
+    const bv = baselineObj[k];
+    const cv = currentObj[k];
+    const bEmpty = bv === undefined || bv === '' || (typeof bv === 'number' && !Number.isFinite(bv));
+    const cEmpty = cv === undefined || cv === '' || (typeof cv === 'number' && !Number.isFinite(cv));
+    if (bEmpty && cEmpty) return;
+    tracked += 1;
+    if (!financeFieldNearEqual(bv, cv, k)) changed += 1;
+  });
+  return { changed, tracked };
+}
+
+/**
+ * 자동 채움 응답·현재 폼값 기준 산식·근거 카드 (대출 추천 아님).
+ * recommendation.explanation·sources·notes 우선, 없으면 fallback 문구 사용.
+ */
+function buildFinanceRecommendationExplanation(recommendation, formValues) {
+  const rec = recommendation || {};
+  const fv = formValues || {};
+  const apiEx = rec.explanation || {};
+  const srcAll = rec.sources || {};
+  const model = buildFinancePreviewModel(fv);
+  const fundingGap = Math.max(0, model.recommended_working_capital - Number(fv.cash_balance || 0));
+  const fixed = model.fixed_cost;
+  const rawCash = Number(fv.cash_balance || 0);
+  const cashMo = fixed > 0 ? rawCash / fixed : null;
+
+  function mergeCard(cardKey, title, fallback, extra = {}) {
+    const ax = apiEx[cardKey];
+    const fb = fallback || {};
+    const formula = (ax && ax.formula) ? String(ax.formula) : fb.formula;
+    const basis = (ax && ax.basis) ? String(ax.basis) : fb.basis;
+    const caution = (ax && ax.caution) ? String(ax.caution) : fb.caution;
+    const srcLine = srcAll[cardKey] ? String(srcAll[cardKey]) : '';
+    return {
+      title,
+      formula,
+      basis,
+      caution,
+      sourceExtra: srcLine,
+      computedNote: extra.computedNote,
+    };
+  }
+
+  const cards = [
+    mergeCard(
+      'monthly_sales',
+      '월 평균 매출',
+      {
+        formula: '선택 상권·업종 분기 추정매출 ÷ 3개월 ÷ 동일 업종 점포 수',
+        basis: '서울시 상권 추정매출 + 점포 데이터',
+        caution: '개별 점포 실제 매출과 다를 수 있음',
+      },
+    ),
+    mergeCard(
+      'rent',
+      '월 임대료',
+      {
+        formula: '예상 월매출 × 업종별 임대료 부담률 × 지역 보정계수',
+        basis: '업종 운영 템플릿 + 임대료 지표',
+        caution: '실제 임대료는 면적, 층수, 계약조건에 따라 다름',
+      },
+    ),
+    mergeCard(
+      'labor_cost',
+      '월 인건비',
+      {
+        formula: '업종별 인건비 비율 × 예상 월매출 (직원 수·급여 가정을 매출 비율로 근사)',
+        basis: '업종 운영 템플릿',
+        caution: '근무시간과 고용형태에 따라 달라짐',
+      },
+    ),
+    mergeCard(
+      'funding_check_gap',
+      '자금 점검 필요액',
+      {
+        formula: '최소 권장 현금보유액 − 현재 현금보유액 (최소 권장 ≈ 월 고정비 × 3개월)',
+        basis: '월 고정비 3개월분 기준',
+        caution: '대출 추천이 아니라 자금 점검 참고값',
+      },
+      {
+        computedNote:
+          `현재 입력 기준: 최소 권장 현금 약 ${fmtMoney(model.recommended_working_capital)}, `
+          + `점검 여유 부족분 약 ${fmtMoney(fundingGap)}`,
+      },
+    ),
+    mergeCard(
+      'cash_runway_months',
+      '현금보유개월 수',
+      {
+        formula: '현금보유액 ÷ 월 고정비',
+        basis: '입력값 또는 시뮬레이션 기본값 기반',
+        caution: '매출 변동이 크면 실제 버틸 수 있는 기간은 달라질 수 있음',
+      },
+      {
+        computedNote: Number.isFinite(cashMo) && fixed > 0
+          ? `현재 입력 기준 약 ${cashMo.toFixed(1)}개월 (월 고정비 합 약 ${fmtMoney(fixed)})`
+          : '월 고정비가 0에 가까우면 개월 수 해석이 불안정할 수 있습니다.',
+      },
+    ),
+  ];
+
+  const footerNotes = Array.isArray(rec.notes) ? rec.notes.slice() : [];
+
+  return { cards, footerNotes };
+}
+
+function renderFinanceRecommendationExplainHtml(rec, formValues, baseline) {
+  const pack = buildFinanceRecommendationExplanation(rec, formValues);
+  const { changed, tracked } = countFinanceDiff(baseline, formValues);
+  let bannerHtml = '';
+  if (changed > 0) {
+    bannerHtml =
+      changed >= tracked && tracked > 0
+        ? `<div class="fre-banner fre-banner-strong">${escapeHtml(
+          '현재 숫자는 사용자 수정값 기준으로 미리보기가 재계산되었습니다.',
+        )}</div>`
+        : `<div class="fre-banner">${escapeHtml(
+          '일부 값은 사용자가 수정했습니다. 아래 산식·근거는 참고용입니다.',
+        )}</div>`;
+  }
+
+  const cardsHtml = pack.cards
+    .map((c) => {
+      const srcBlock = c.sourceExtra
+        ? `<div class="fre-src-line"><span class="fre-src-label">출처 요약</span> ${escapeHtml(c.sourceExtra)}</div>`
+        : '';
+      const computed = c.computedNote
+        ? `<dt>참고 수치</dt><dd class="fre-computed">${escapeHtml(c.computedNote)}</dd>`
+        : '';
+      return `
+      <div class="fre-card">
+        <div class="fre-card-title">${escapeHtml(c.title)}</div>
+        <dl class="fre-dl">
+          <dt>산식</dt><dd>${escapeHtml(c.formula)}</dd>
+          <dt>근거</dt><dd>${escapeHtml(c.basis)}${srcBlock}</dd>
+          <dt>주의</dt><dd>${escapeHtml(c.caution)}</dd>
+          ${computed}
+        </dl>
+      </div>`;
+    })
+    .join('');
+
+  const notesHtml = pack.footerNotes.length
+    ? `<ul class="fre-notes">${pack.footerNotes.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>`
+    : '';
+
+  return `
+    ${bannerHtml}
+    <div class="fre-head-block">
+      <h3 class="fre-main-title">추천값 산식·근거</h3>
+      <p class="fre-sub">공공데이터·업종 휴리스틱 기준 <strong>사업 조건 시뮬레이션 기본값</strong> 설명입니다. 특정 금융상품을 권유하지 않습니다.</p>
+    </div>
+    <div class="fre-cards">${cardsHtml}</div>
+    ${notesHtml}
+    <p class="fre-disclaimer">대출 가능 여부와 금리는 실제 심사·상담을 통해 확인해야 합니다.</p>
+  `;
+}
+
+function updateFinanceRecommendationExplainPanel() {
+  const wrap = document.getElementById('finance-recommendation-explain');
+  if (!wrap) return;
+  if (!State.financeRecommendationApplied || !State.recommendation) {
+    wrap.hidden = true;
+    wrap.innerHTML = '';
+    return;
+  }
+  const fv = readFinance();
+  wrap.hidden = false;
+  wrap.innerHTML = renderFinanceRecommendationExplainHtml(
+    State.recommendation,
+    fv,
+    State.financeRecommendationBaseline,
+  );
+}
+
 /**
  * 결과 컨설팅 화면용 재무 묶음.
  * 분석 전 단계에서 입력한 값(State.finance)과 API 합성값을 합친 뒤,
@@ -686,7 +1428,188 @@ function financeForResultView(d) {
   };
 }
 
+/** 사용자 유형 「창업 예정자」(예비창업) 여부 */
+function isPreStartupUser(d) {
+  const ut = String(d?.user_type || State.user_type || '').trim();
+  return ut === '창업 예정자';
+}
+
+/**
+ * 예비창업 시뮬레이션 (창업비·자기자본·대출금리·개업 후 운영 가용).
+ * 분석 결과 재무 스냅샷 f의 월 손익·고정비 가정을 그대로 사용한다.
+ */
+function computeStartupFundingSimulation(inputs, f) {
+  const startup = Math.max(0, Number(inputs.startup || 0));
+  const equity = Math.max(0, Number(inputs.equity || 0));
+  const ratePct = Number(inputs.ratePct ?? 5.5);
+  const reserve = Math.max(0, Number(inputs.reserve || 0));
+
+  const loanNeed = Math.max(0, startup - equity);
+  const loanMonthlyInt = loanNeed * (ratePct / 100) / 12;
+
+  const ms = Number(f.monthly_sales) || 0;
+  const fixed = Number(f.fixed_cost) || 0;
+  const variable = Number(f.variable_cost) || 0;
+  const mrep = Number(f.monthly_repayment) || 0;
+  const legacyInt = Number(f.monthly_interest) || 0;
+
+  const netMonthly = ms - fixed - variable - mrep - legacyInt - loanMonthlyInt;
+
+  let runwayMonths = null;
+  let runwayNote = '';
+  if (reserve <= 0) {
+    runwayNote = '개업 직후 운영에 쓸 수 있는 현금(운영 가용)을 입력하면, 적자일 때 대략 몇 개월 버틸 수 있는지 계산합니다.';
+  } else if (netMonthly >= 0) {
+    runwayNote = `이 가정에서는 월 순현금이 약 ${fmtMoney(netMonthly)} 흑자(추정)입니다. 창업 초기에는 매출·비용이 변동할 수 있어, 운영 가용은 안전 버퍼로 두는 것을 권장합니다.`;
+  } else {
+    const deficit = -netMonthly;
+    runwayMonths = reserve / deficit;
+    runwayNote = `월 순현금이 약 ${fmtMoney(deficit)} 부족(추정)일 때, 운영 가용 ${fmtMoney(reserve)}으로는 약 <b>${runwayMonths.toFixed(1)}개월</b> 버틸 수 있는 수준(참고)입니다.`;
+  }
+
+  const equityRatio = startup > 0 ? Math.round((Math.min(equity, startup) / startup) * 1000) / 10 : null;
+  const loanCoverRatio = startup > 0 ? Math.round((loanNeed / startup) * 1000) / 10 : null;
+
+  return {
+    startup,
+    equity,
+    ratePct,
+    reserve,
+    loanNeed,
+    loanMonthlyInt,
+    netMonthly,
+    runwayMonths,
+    runwayNote,
+    equityRatio,
+    loanCoverRatio,
+  };
+}
+
+function renderStartupOverviewExtras(d) {
+  if (!isPreStartupUser(d)) return '';
+  const f = financeForResultView(d);
+  const initTot = Number(f.initial_investment || 0);
+  const own = Number((f.own_capital != null && f.own_capital !== '') ? f.own_capital : (f.cash_balance || 0));
+  const gap = Number(f.funding_gap_estimate ?? Math.max(0, initTot - own));
+  const loanEst = Number(f.loan_needed_estimate ?? gap);
+  const rec = Number(f.recommended_working_capital || 0);
+  const ir = Number(f.interest_rate || 5.5);
+  const loanInt = Number(f.loan_monthly_interest_estimate || loanEst * ir / 100 / 12);
+
+  return `
+    <div class="startup-overview-banner">
+      <div class="startup-overview-title">예비창업 자금·조달 가늠치 (추정 · 참고)</div>
+      <p class="startup-overview-lead">
+        아래 수치는 선택 상권·업종과 입력한 사업 조건(또는 합성 데이터)으로 계산된 <b>참고값</b>입니다. 실제 가맹비·인테리어·보증금은 계약에 따라 달라질 수 있습니다.
+      </p>
+      <ul class="startup-overview-list">
+        <li><strong>초기 소요(추정)</strong> 약 <b>${fmtMoney(initTot)}</b> — 시설·보증금·가맹비 등 구성은 자금 탭에서 확인</li>
+        <li><strong>자기자본(반영값)</strong> 약 <b>${fmtMoney(own)}</b> — 부족분은 조달·대출 검토 구간으로 가늠</li>
+        <li><strong>참고 조달·대출 검토액</strong> 약 <b>${fmtMoney(loanEst)}</b> (자기자본을 초기 소요까지 채운 뒤 남는 부족분 기준)</li>
+        <li><strong>위 조달액 가정 시 월 이자(연 ${ir}% 가정)</strong> 약 <b>${fmtMoney(loanInt)}</b></li>
+        <li><strong>권장 운영자금(약 3개월 고정비)</strong> 약 <b>${fmtMoney(rec)}</b> — 오픈 초 현금 흐름 완충용으로 별도 확보 검토</li>
+      </ul>
+    </div>`;
+}
+
+function buildStartupSimulatorSection(d, f) {
+  if (!isPreStartupUser(d)) return '';
+
+  const startupDef = Math.round(Number(f.initial_investment || 0));
+  const equityDef = Math.round(Number((f.own_capital != null && f.own_capital !== '') ? f.own_capital : (f.cash_balance || 0)));
+  const rateDef = Number(f.interest_rate || 5.5);
+  const reserveDef = Math.round(Number(f.cash_balance || 0));
+
+  return `
+    <section class="startup-sim-card" aria-labelledby="startup-sim-heading">
+      <h4 class="startup-sim-title" id="startup-sim-heading">예비창업 자금 시뮬레이션</h4>
+      <p class="startup-sim-lead">
+        <b>예상 창업비용</b>과 <b>직접 부담 가능한 자금</b>을 넣으면, 부족분을 대출로 메웠다고 가정할 때의 <b>참고 대출액·월 이자</b>를 볼 수 있습니다.
+        <b>개업 직후 운영 가용 현금</b>을 넣으면, 분석 결과의 월 매출·비용 가정으로 <b>대략 몇 개월 운영을 버틸 수 있는지</b>도 계산합니다.
+      </p>
+      <div class="startup-sim-grid">
+        <label class="startup-sim-field">
+          <span>예상 창업비용 총액 (원)</span>
+          <input type="number" id="startup-sim-startup" min="0" step="100000" value="${startupDef}" />
+        </label>
+        <label class="startup-sim-field">
+          <span>직접 부담 가능 자금 · 자기자본 (원)</span>
+          <input type="number" id="startup-sim-equity" min="0" step="100000" value="${equityDef}" />
+        </label>
+        <label class="startup-sim-field">
+          <span>조달 대출 금리 가정 (연 %)</span>
+          <input type="number" id="startup-sim-rate" min="0" max="30" step="0.1" value="${rateDef}" />
+        </label>
+        <label class="startup-sim-field">
+          <span>개업 직후 운영 가용 현금 (원)</span>
+          <input type="number" id="startup-sim-reserve" min="0" step="100000" value="${reserveDef}" />
+        </label>
+      </div>
+      <div class="startup-sim-results" id="startup-sim-results"></div>
+      <p class="startup-sim-footnote">
+        월 순현금에는 분석 결과의 월 매출·임대·인건비·원가율·기존 대출 월상환·기존 대출 이자에,
+        위에서 가정한 <b>추가 조달분에 대한 월 이자</b>까지 반영합니다. 실제 심사 한도·금리·상환 조건은 금융기관 상담 결과와 다를 수 있습니다.
+      </p>
+    </section>`;
+}
+
+function updateStartupSimulatorDOM(d) {
+  const root = document.getElementById('startup-sim-results');
+  if (!root || !isPreStartupUser(d)) return;
+
+  const f = financeForResultView(d);
+  const startup = Number(document.getElementById('startup-sim-startup')?.value || 0);
+  const equity = Number(document.getElementById('startup-sim-equity')?.value || 0);
+  const ratePct = Number(document.getElementById('startup-sim-rate')?.value ?? 5.5);
+  const reserve = Number(document.getElementById('startup-sim-reserve')?.value || 0);
+
+  const sim = computeStartupFundingSimulation(
+    { startup, equity, ratePct, reserve },
+    f,
+  );
+
+  const loanPctTxt = sim.loanCoverRatio != null
+    ? `창업비 중 약 <b>${sim.loanCoverRatio}%</b>를 조달·대출로 메운다고 가정`
+    : '';
+  const equityPctTxt = sim.equityRatio != null
+    ? `창업비 중 약 <b>${sim.equityRatio}%</b>를 자기자본으로 부담`
+    : '';
+
+  root.innerHTML = `
+    <div class="startup-sim-kpis">
+      <div class="startup-sim-kpi">
+        <div class="startup-sim-kpi-label">조달·대출 필요액 (추정)</div>
+        <div class="startup-sim-kpi-value">${fmtMoney(sim.loanNeed)}</div>
+        <div class="startup-sim-kpi-sub">${loanPctTxt}</div>
+      </div>
+      <div class="startup-sim-kpi">
+        <div class="startup-sim-kpi-label">위 금액 가정 시 월 이자 (추정)</div>
+        <div class="startup-sim-kpi-value">${fmtMoney(sim.loanMonthlyInt)}</div>
+        <div class="startup-sim-kpi-sub">${equityPctTxt}</div>
+      </div>
+      <div class="startup-sim-kpi wide">
+        <div class="startup-sim-kpi-label">개업 후 월 순현금흐름 (추정)</div>
+        <div class="startup-sim-kpi-value">${fmtMoney(sim.netMonthly)}</div>
+        <div class="startup-sim-kpi-sub">매출 − 고정·변동비 − 기존 대출 상환·이자 − <b>추가 조달 이자</b></div>
+      </div>
+    </div>
+    <div class="startup-sim-runway">
+      <div class="startup-sim-runway-label">운영 가용 현금으로 버티는 기간 (참고)</div>
+      <div class="startup-sim-runway-body">${sim.runwayNote}</div>
+    </div>`;
+}
+
+function bindStartupSimulatorPanel(d) {
+  if (!isPreStartupUser(d)) return;
+  ['startup-sim-startup', 'startup-sim-equity', 'startup-sim-rate', 'startup-sim-reserve'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => updateStartupSimulatorDOM(d));
+    document.getElementById(id)?.addEventListener('change', () => updateStartupSimulatorDOM(d));
+  });
+  updateStartupSimulatorDOM(d);
+}
+
 function refreshFinanceLivePreview() {
+  updateFinanceRecommendationExplainPanel();
   const kpi = document.getElementById('finance-live-kpis');
   const cvGap = document.getElementById('fin-live-chart-gap');
   const cvMonthly = document.getElementById('fin-live-chart-monthly');
@@ -791,6 +1714,7 @@ async function executeAnalysisPipeline() {
   try {
     const [data] = await Promise.all([analyzeNow(State), animPromise]);
     State.result = data;
+    autoSaveAnalysisHistory(data);
     markAllChecksDone();
     await sleep(250);
     renderResult(data);
@@ -828,24 +1752,217 @@ async function analyzeNow(s) {
   return fetchJson('/api/analysis', { method: 'POST', body: JSON.stringify(body) });
 }
 
+/** 결과 패널 탭 id (순서와 무관하게 표시 전환에 사용) */
+const RESULT_PANEL_TAB_IDS = ['overview', 'trend', 'map', 'finance', 'services', 'action-plan', 'report'];
+
+function switchResultTab(target) {
+  document.querySelectorAll('#panel-result .tab').forEach(x => {
+    x.classList.toggle('active', x.dataset.tab === target);
+  });
+  RESULT_PANEL_TAB_IDS.forEach((name) => {
+    const el = document.getElementById(`tab-${name}`);
+    if (!el) return;
+    el.style.display = (name === target) ? '' : 'none';
+    if (name === target) el.classList.add('active');
+    else el.classList.remove('active');
+  });
+  if (target === 'trend') renderTrendTab();
+  if (target === 'finance' && State.result) drawFinanceCharts(State.result);
+  if (target === 'map') renderMapTab();
+  if (target === 'report') renderReportTab();
+  if (target === 'action-plan') renderActionPlanTab(State.result);
+}
+
+function normalizeActionPlanItem(item) {
+  if (item == null) return null;
+  if (typeof item === 'string') {
+    const text = item.trim();
+    return text ? { text, cta: null } : null;
+  }
+  if (typeof item === 'object') {
+    const text = String(item.text || item.title || item.label || '').trim();
+    if (!text) return null;
+    let cta = null;
+    if (item.cta && typeof item.cta === 'object' && item.cta.label && item.cta.tab) {
+      cta = { label: String(item.cta.label), tab: String(item.cta.tab) };
+    } else if (item.cta_label && item.cta_tab) {
+      cta = { label: String(item.cta_label), tab: String(item.cta_tab) };
+    }
+    return { text, cta };
+  }
+  return null;
+}
+
+function normalizeActionPlanFromApi(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  function pickArr(...keys) {
+    for (const k of keys) {
+      const v = raw[k];
+      if (Array.isArray(v) && v.length) return v;
+    }
+    return [];
+  }
+  const today = pickArr('today', '오늘', 'today_tasks').map(normalizeActionPlanItem).filter(Boolean);
+  const week = pickArr('week', '이번주', 'week_tasks').map(normalizeActionPlanItem).filter(Boolean);
+  const month = pickArr('month', '이번달', 'month_tasks').map(normalizeActionPlanItem).filter(Boolean);
+  if (!today.length && !week.length && !month.length) return null;
+  return { today, week, month };
+}
+
+const PLAN_30_STARTUP = {
+  today: [
+    { text: '후보 상권 2곳 추가 비교', cta: { label: '상권 요약 보기', tab: 'overview' } },
+    { text: '예상 임대료와 보증금 확인', cta: { label: '자금·손익분기점 보기', tab: 'finance' } },
+    { text: '경쟁점 10개 메뉴·가격 조사', cta: { label: '경쟁점 지도 보기', tab: 'map' } },
+  ],
+  week: [
+    { text: '손익분기점 기준으로 월 고정비 재조정', cta: { label: '자금 시뮬레이션 보기', tab: 'finance' } },
+    { text: '초기 운영자금 6개월분 확보 가능성 점검', cta: { label: '자금·손익분기점 보기', tab: 'finance' } },
+    { text: '카드 매출관리 전략 설계', cta: { label: '신한 서비스 연결 보기', tab: 'services' } },
+  ],
+  month: [
+    { text: '정책자금·보증 상담 가능성 확인', cta: { label: '상담 준비자료 보기', tab: 'services' } },
+    { text: '보험 체크리스트 확인', cta: { label: '보험 체크리스트 보기', tab: 'services' } },
+    { text: '오픈 전 프로모션 계획 수립', cta: { label: 'AI 리포트 보기', tab: 'report' } },
+  ],
+};
+
+const PLAN_30_OPERATING = {
+  today: [
+    { text: '약한 시간대 매출 확인', cta: { label: '매출·점포 추이 보기', tab: 'trend' } },
+    { text: '고정비 항목 점검', cta: { label: '자금 시뮬레이션 보기', tab: 'finance' } },
+    { text: '최근 4주 매출 변화 확인', cta: { label: '매출·점포 추이 보기', tab: 'trend' } },
+  ],
+  week: [
+    { text: '재방문 쿠폰 또는 프로모션 테스트', cta: { label: '신한 서비스 연결 보기', tab: 'services' } },
+    { text: '매출 감소 시나리오 점검', cta: { label: '자금·손익분기점 보기', tab: 'finance' } },
+    { text: '카드 정산 주기 확인', cta: { label: '신한 서비스 연결 보기', tab: 'services' } },
+  ],
+  month: [
+    { text: '운영자금 상담 필요성 점검', cta: { label: '신한 서비스 연결 보기', tab: 'services' } },
+    { text: '보험 보장 공백 확인', cta: { label: '보험 체크리스트 보기', tab: 'services' } },
+    { text: '비용 절감 항목 실행', cta: { label: '자금 시뮬레이션 보기', tab: 'finance' } },
+  ],
+};
+
+function clone30DayPlan(p) {
+  const cp = (arr) => arr.map((x) => ({
+    text: x.text,
+    cta: x.cta ? { label: x.cta.label, tab: x.cta.tab } : null,
+  }));
+  return {
+    today: cp(p.today || []),
+    week: cp(p.week || []),
+    month: cp(p.month || []),
+  };
+}
+
+function actionPlanPersonaIsOperating(d) {
+  const ut = String(d?.user_type || State.user_type || '').trim();
+  return ut.includes('운영') || ut.includes('금융 점검') || ut.includes('금융/보험');
+}
+
+function buildDefault30DayActionPlan(data) {
+  const d = data || {};
+  return clone30DayPlan(actionPlanPersonaIsOperating(d) ? PLAN_30_OPERATING : PLAN_30_STARTUP);
+}
+
+function augmentActionPlanWithSignals(plan, d) {
+  const out = clone30DayPlan(plan);
+  const fin = financeForResultView(d) || {};
+  const cmRaw = fin.cash_months ?? fin.cash_runway_months ?? d?.finance?.cash_months;
+  const cm = Number(cmRaw);
+  if (Number.isFinite(cm) && cm < 6) {
+    out.week.unshift({
+      text: `현금보유개월이 약 ${cm.toFixed(1)}개월 수준으로 추정되어 운영자금 버퍼를 우선 점검하세요.`,
+      cta: { label: '자금·손익분기점 보기', tab: 'finance' },
+    });
+  }
+  const comp = Number(d?.scores?.competition?.score);
+  if (Number.isFinite(comp) && comp >= 58) {
+    const hit = [...out.today, ...out.week].some((x) => /경쟁/.test(x.text));
+    if (!hit) {
+      out.today.push({
+        text: '경쟁 강도가 높게 나왔습니다. 반경 내 유사 업종 가격대를 다시 확인하세요.',
+        cta: { label: '경쟁점 지도 보기', tab: 'map' },
+      });
+    }
+  }
+  const warns = Array.isArray(d.warnings) ? d.warnings : [];
+  if (warns.length) {
+    out.week.push({
+      text: `조기경보 ${warns.length}건을 반영해 원인·대응을 메모해 두세요.`,
+      cta: { label: '매출·점포 추이 보기', tab: 'trend' },
+    });
+  }
+  return out;
+}
+
+/**
+ * API의 action_plan_30days / action_plan 우선, 없으면 유형·점수·경고 기반 fallback.
+ * @returns {{ today: Array<{text:string, cta:{label:string, tab:string}|null}>, week: ..., month: ... }}
+ */
+function build30DayActionPlan(data) {
+  const d = data || {};
+  const fromApi = normalizeActionPlanFromApi(d.action_plan_30days)
+    || normalizeActionPlanFromApi(d.action_plan);
+  const base = fromApi || buildDefault30DayActionPlan(d);
+  return augmentActionPlanWithSignals(base, d);
+}
+
+function renderActionPlanTab(data) {
+  const wrap = document.getElementById('tab-action-plan');
+  if (!wrap) return;
+  const d = data || State.result;
+  if (!d) {
+    wrap.innerHTML = '<p class="tab-desc">분석 결과가 없습니다.</p>';
+    return;
+  }
+  const plan = build30DayActionPlan(d);
+
+  function col(title, items, slug) {
+    const lis = items.map((it) => {
+      const ctaHtml = it.cta && it.cta.label && it.cta.tab
+        ? `<div class="action-plan-cta-row"><button type="button" class="btn btn-ghost btn-sm action-plan-cta" data-ap-tab="${escapeHtml(it.cta.tab)}">${escapeHtml(it.cta.label)}</button></div>`
+        : '';
+      return `<li class="action-plan-item"><span class="action-plan-text">${escapeHtml(it.text)}</span>${ctaHtml}</li>`;
+    }).join('');
+    return `
+      <section class="action-plan-section" aria-labelledby="ap-${slug}">
+        <h4 class="action-plan-h" id="ap-${slug}">${escapeHtml(title)}</h4>
+        <ul class="action-plan-list">${lis}</ul>
+      </section>`;
+  }
+
+  wrap.innerHTML = `
+    <h3 class="tab-title">30일 실행 플랜</h3>
+    <p class="tab-desc">바로 실행할 수 있는 행동 목록입니다. 아래 버튼은 이 결과 화면 안의 다른 탭으로만 이동하며, 외부 상담 신청이나 데이터 전송은 하지 않습니다.</p>
+    <div class="action-plan-grid">
+      ${col('오늘 할 일', plan.today, 'today')}
+      ${col('이번 주 할 일', plan.week, 'week')}
+      ${col('이번 달 할 일', plan.month, 'month')}
+    </div>
+  `;
+}
+
 // ── 5. 결과 렌더링 ─────────────────────────────────────────────────────────
 function initResultTabs() {
   document.querySelectorAll('#panel-result .tab').forEach(t => {
-    t.addEventListener('click', () => {
-      document.querySelectorAll('#panel-result .tab').forEach(x => x.classList.remove('active'));
-      t.classList.add('active');
-      const target = t.dataset.tab;
-      ['overview','trend','map','finance','services','report'].forEach(name => {
-        const el = document.getElementById('tab-' + name);
-        if (el) el.style.display = (name === target) ? '' : 'none';
-        if (name === target) el.classList.add('active'); else el?.classList.remove('active');
-      });
-      if (target === 'trend')   renderTrendTab();
-      if (target === 'finance' && State.result) drawFinanceCharts(State.result);
-      if (target === 'map')     renderMapTab();
-      if (target === 'report')  renderReportTab();
-    });
+    t.addEventListener('click', () => switchResultTab(t.dataset.tab));
   });
+
+  const panelResult = document.getElementById('panel-result');
+  if (panelResult && !panelResult.dataset.apTabBound) {
+    panelResult.dataset.apTabBound = '1';
+    panelResult.addEventListener('click', (e) => {
+      const btn = e.target.closest('.action-plan-cta[data-ap-tab]');
+      if (!btn || !panelResult.contains(btn)) return;
+      const tab = btn.dataset.apTab;
+      if (!tab || !RESULT_PANEL_TAB_IDS.includes(tab)) return;
+      e.preventDefault();
+      switchResultTab(tab);
+    });
+  }
 
   document.querySelectorAll('#panel-result [data-go]').forEach(b => {
     b.addEventListener('click', () => {
@@ -867,13 +1984,14 @@ function renderResult(data) {
   renderServicesTab(data);
   document.getElementById('tab-report').innerHTML = '';
   document.getElementById('tab-trend').innerHTML  = '';
+  document.getElementById('tab-action-plan').innerHTML = '';
   destroyMapView();
   document.getElementById('tab-map').innerHTML    = '';
   // 결과 패널 탭만 초기화 (전역 .tab 은 운영/금융 등 다른 패널 탭과 섞이면 안 됨)
   document.querySelectorAll('#panel-result .tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === 'overview');
   });
-  ['overview','trend','map','finance','services','report'].forEach(n => {
+  RESULT_PANEL_TAB_IDS.forEach((n) => {
     const el = document.getElementById('tab-' + n);
     if (!el) return;
     el.style.display = (n === 'overview') ? '' : 'none';
@@ -881,10 +1999,414 @@ function renderResult(data) {
   });
 }
 
+function fmtManwon(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '추정 불가';
+  return `${Math.round(n / 10000).toLocaleString('ko-KR')}만 원`;
+}
+
+function fmtMonth1(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '추정 불가';
+  return `${n.toFixed(1)}개월`;
+}
+
+function buildDecisionSummary(data) {
+  const d = data || {};
+  const finance = financeForResultView(d) || {};
+  const final = d?.scores?.final || {};
+  const userType = String(d?.user_type || State.user_type || '').trim();
+
+  const pickNum = (...vals) => {
+    for (const v of vals) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+
+  const monthly = pickNum(
+    d.monthly_sales,
+    d.estimated_monthly_sales,
+    d?.finance?.monthly_sales,
+    d?.business_input?.monthly_sales,
+    finance.monthly_sales,
+  );
+  const breakEven = pickNum(
+    d.break_even_sales,
+    d?.finance?.break_even_sales,
+    d?.business_input?.break_even_sales,
+    d?.finance?.break_even,
+    finance.break_even,
+  );
+  const cashRunway = pickNum(
+    d.cash_runway_months,
+    d?.finance?.cash_runway_months,
+    d?.business_input?.cash_runway_months,
+    d?.finance?.cash_months,
+    finance.cash_months,
+  );
+
+  let baseConclusion = '의사결정 판단을 위해 추가 점검이 필요합니다.';
+  if (userType === '창업 예정자') baseConclusion = '창업은 조건부 추천입니다.';
+  else if (userType === '운영 중인 사업자') baseConclusion = '운영 안정도는 보통 수준입니다.';
+  else if (userType === '금융 점검' || userType === '금융/보험/비용 구조 점검') baseConclusion = '재무 체력 점검이 필요합니다.';
+
+  const scoreTxt = Number.isFinite(Number(final.score))
+    ? `${Number(final.score).toFixed(0)}점${final.label ? `(${final.label})` : ''}`
+    : null;
+  const beStatus = (monthly != null && breakEven != null)
+    ? (monthly >= breakEven ? '예상 월매출이 손익분기 매출을 상회하지만' : '예상 월매출이 손익분기 매출에 못 미쳐')
+    : '핵심 수치 확인이 더 필요하며';
+  const conclusion = scoreTxt
+    ? `${baseConclusion} 현재 종합 평가는 ${scoreTxt}이고, ${beStatus} 리스크 점검이 필요합니다.`
+    : `${baseConclusion} ${beStatus} 운영·상권 조건 점검이 필요합니다.`;
+
+  const warnings = Array.isArray(d.warnings) ? d.warnings.filter(Boolean).slice(0, 3) : [];
+  const score = d?.scores || {};
+  const riskPool = [];
+  if ((score.competition?.score ?? 0) >= 60) riskPool.push('동일 업종 경쟁 강도');
+  if ((score.rent?.score ?? 0) >= 60) riskPool.push('임대료·고정비 부담');
+  if ((score.debt?.score ?? 100) < 50) riskPool.push('초기 자금·현금 여력');
+  if ((score.attraction?.score ?? 100) < 50) riskPool.push('상권 매력도');
+  const riskHead = riskPool.slice(0, 3);
+  const risk = riskHead.length
+    ? `${riskHead.join(', ')}이 주요 리스크입니다.${warnings.length ? ` (${warnings.join(' / ')})` : ''}`
+    : (warnings.length ? `${warnings.join(' / ')} 점검이 필요합니다.` : '핵심 리스크는 경쟁 강도·고정비·현금 여력 중심으로 점검이 필요합니다.');
+
+  const actionItems = [];
+  if (cashRunway != null && cashRunway < 6) actionItems.push('6개월 내 운영자금 버퍼 확보');
+  if ((score.competition?.score ?? 0) >= 60) actionItems.push('경쟁점 대비 차별화 전략 수립');
+  if ((score.shinhan_card?.score ?? 0) >= 50) actionItems.push('카드 매출관리 계획 점검');
+  if (!actionItems.length) actionItems.push('손익분기·현금흐름 월간 점검');
+  const action = `${actionItems.slice(0, 3).join(', ')}이 필요합니다.`;
+
+  return {
+    conclusion,
+    risk,
+    action,
+    metrics: [
+      { label: '예상 월매출', value: monthly == null ? '추정 불가' : fmtManwon(monthly), helper: '상권·업종 기준 추정' },
+      { label: '손익분기 매출', value: breakEven == null ? '추정 불가' : fmtManwon(breakEven), helper: '적자 없이 버티기 위한 최소 매출' },
+      { label: '현금보유개월 수', value: cashRunway == null ? '추정 불가' : fmtMonth1(cashRunway), helper: '현재 현금으로 버틸 수 있는 기간' },
+    ],
+  };
+}
+
+/**
+ * 기회·주의 요인 Top 3용 구조화 데이터.
+ * API 필드 opportunity_factors / risk_factors 가 있으면 우선 사용하고, 없으면 점수·경고·재무 등으로 보완한다.
+ * @returns {{ opportunities: Array<{title:string,description:string,level:string,source:string}>, risks: Array<...> }}
+ */
+function buildOpportunityRiskFactors(data) {
+  const d = data || {};
+  const EMPTY_LEVEL = 'medium';
+
+  function normalizeFactor(raw, fallbackSource) {
+    if (raw == null) return null;
+    if (typeof raw === 'string') {
+      const s = raw.trim();
+      if (!s) return null;
+      return {
+        title: s.length > 28 ? `${s.slice(0, 28)}…` : s,
+        description: s,
+        level: EMPTY_LEVEL,
+        source: fallbackSource,
+      };
+    }
+    const title = String(raw.title ?? raw.label ?? raw.name ?? '').trim() || '요약';
+    const description = String(
+      raw.description ?? raw.detail ?? raw.message ?? raw.text ?? raw.body ?? '',
+    ).trim();
+    const lev = String(raw.level || '').toLowerCase();
+    const level = lev === 'high' || lev === 'medium' || lev === 'low' ? lev : EMPTY_LEVEL;
+    const source = String(raw.source ?? fallbackSource ?? '분석');
+    return {
+      title,
+      description: description || title,
+      level,
+      source,
+    };
+  }
+
+  function buildFallbackFactors() {
+  const scores = d.scores || {};
+  const finance = financeForResultView(d) || {};
+  const warnings = Array.isArray(d.warnings) ? d.warnings.filter(Boolean) : [];
+  const shinhanCard = d?.shinhan_panels?.card?.diagnosis || {};
+
+  const pickNum = (...vals) => {
+    for (const v of vals) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+
+  const monthly = pickNum(
+    d.monthly_sales,
+    d.estimated_monthly_sales,
+    d?.finance?.monthly_sales,
+    d?.business_input?.monthly_sales,
+    finance.monthly_sales,
+  );
+  const breakEven = pickNum(
+    d.break_even_sales,
+    d?.finance?.break_even_sales,
+    d?.business_input?.break_even_sales,
+    d?.finance?.break_even,
+    finance.break_even,
+  );
+  const cashRunway = pickNum(
+    d.cash_runway_months,
+    d?.finance?.cash_runway_months,
+    d?.business_input?.cash_runway_months,
+    d?.finance?.cash_months,
+    finance.cash_months,
+  );
+
+  const finalSc = Number(scores.final?.score);
+  const survivalSc = Number(scores.survival?.score);
+  const populationSc = Number(scores.population?.score);
+  const growthSc = Number(scores.growth?.score);
+  const competitionSc = Number(scores.competition?.score);
+  const rentSc = Number(scores.rent?.score);
+  const attractionSc = Number(scores.attraction?.score);
+  const ecosystemSc = Number(scores.ecosystem?.score);
+  const shinhanCardSc = Number(scores.shinhan_card?.score);
+
+  const levPos = (sc) => {
+    if (!Number.isFinite(sc)) return EMPTY_LEVEL;
+    if (sc >= 72) return 'high';
+    if (sc >= 55) return 'medium';
+    return 'low';
+  };
+  const levNegHigh = (sc) => {
+    if (!Number.isFinite(sc)) return EMPTY_LEVEL;
+    if (sc >= 65) return 'high';
+    if (sc >= 50) return 'medium';
+    return 'low';
+  };
+  const levPosLow = (sc) => {
+    if (!Number.isFinite(sc)) return EMPTY_LEVEL;
+    if (sc <= 35) return 'high';
+    if (sc <= 45) return 'medium';
+    return 'low';
+  };
+
+  const opportunities = [];
+  const risks = [];
+  const seenO = new Set();
+  const seenR = new Set();
+
+  function pushO(title, description, level, source) {
+    const key = `${title}|${description}`;
+    if (seenO.has(key) || opportunities.length >= 3) return;
+    seenO.add(key);
+    opportunities.push({ title, description, level, source });
+  }
+  function pushR(title, description, level, source) {
+    const key = `${title}|${description}`;
+    if (seenR.has(key) || risks.length >= 3) return;
+    seenR.add(key);
+    risks.push({ title, description, level, source });
+  }
+
+  warnings.forEach((w) => {
+    const msg = String(w).trim();
+    if (!msg || risks.length >= 3) return;
+    pushR(
+      '조기경보',
+      msg,
+      /급증|감소|낮음|미만/.test(msg) ? 'high' : 'medium',
+      'detect_early_warning',
+    );
+  });
+
+  if (Number.isFinite(finalSc) && finalSc >= 60) {
+    pushO(
+      '종합 점수',
+      '종합 점수가 보통 이상입니다.',
+      levPos(finalSc),
+      'scores.final',
+    );
+  }
+  if (
+    monthly != null
+    && breakEven != null
+    && breakEven > 0
+    && monthly > breakEven
+  ) {
+    pushO(
+      '손익분기 대비 매출',
+      '예상 월매출이 손익분기점을 상회합니다.',
+      'high',
+      'finance 추정',
+    );
+  }
+  if (Number.isFinite(survivalSc) && survivalSc >= 58) {
+    pushO(
+      '업종 생존성',
+      '업종 생존성이 양호합니다.',
+      levPos(survivalSc),
+      'scores.survival',
+    );
+  }
+  if (Number.isFinite(populationSc) && populationSc >= 55) {
+    pushO(
+      '유동인구',
+      '유동인구 적합도가 보통 이상입니다.',
+      levPos(populationSc),
+      'scores.population',
+    );
+  }
+  if (Number.isFinite(growthSc) && growthSc >= 60) {
+    pushO(
+      '매출 성장성',
+      '매출 성장성이 높게 나타납니다.',
+      levPos(growthSc),
+      'scores.growth',
+    );
+  }
+  if (
+    Number.isFinite(shinhanCardSc)
+    && shinhanCardSc >= 50
+    && String(shinhanCard.weak_time || '').trim()
+  ) {
+    pushO(
+      '카드·시간대',
+      '카드 활용 전략을 통해 약한 시간대 개선 여지가 있습니다.',
+      'medium',
+      'shinhan_panels.card',
+    );
+  }
+
+  if (cashRunway != null && cashRunway < 6) {
+    pushR(
+      '현금 버퍼',
+      '현금보유개월 수가 6개월 미만입니다.',
+      cashRunway < 4 ? 'high' : 'medium',
+      'finance.cash_months',
+    );
+  }
+  if (Number.isFinite(competitionSc) && competitionSc >= 55) {
+    pushR(
+      '경쟁 강도',
+      '동일 업종 경쟁이 강한 편입니다.',
+      levNegHigh(competitionSc),
+      'scores.competition',
+    );
+  }
+  if (Number.isFinite(rentSc) && rentSc >= 55) {
+    pushR(
+      '임대·고정비',
+      '임대료·고정비 부담이 높은 편입니다.',
+      levNegHigh(rentSc),
+      'scores.rent',
+    );
+  }
+  if (Number.isFinite(attractionSc) && attractionSc < 48) {
+    pushR(
+      '상권 매력도',
+      '상권 매력도가 낮은 편입니다.',
+      levPosLow(attractionSc),
+      'scores.attraction',
+    );
+  }
+  if (Number.isFinite(ecosystemSc) && ecosystemSc < 48) {
+    pushR(
+      '점포 생태계',
+      '점포 생태계 안정성이 낮습니다.',
+      levPosLow(ecosystemSc),
+      'scores.ecosystem',
+    );
+  }
+
+  return {
+    opportunities: opportunities.slice(0, 3),
+    risks: risks.slice(0, 3),
+  };
+  }
+
+  const oppApi = Array.isArray(d.opportunity_factors) ? d.opportunity_factors : [];
+  const riskApi = Array.isArray(d.risk_factors) ? d.risk_factors : [];
+  const fb = buildFallbackFactors();
+
+  function mergeFactorLists(primaryRaw, fallbackList, apiLabel) {
+    const primary = primaryRaw
+      .map(x => normalizeFactor(x, apiLabel))
+      .filter(Boolean);
+    if (!primary.length) return fallbackList.slice(0, 3);
+    const seen = new Set(primary.map(f => `${f.title}|${f.description}`));
+    const out = [...primary];
+    for (const f of fallbackList) {
+      if (out.length >= 3) break;
+      const k = `${f.title}|${f.description}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(f);
+    }
+    return out.slice(0, 3);
+  }
+
+  const opportunities = mergeFactorLists(oppApi, fb.opportunities, 'API');
+  const risks = mergeFactorLists(riskApi, fb.risks, 'API');
+
+  return { opportunities, risks };
+}
+
+function renderOpportunityRiskFactorsHtml(data) {
+  const ORF_EMPTY = '현재 데이터로 식별된 주요 요인이 부족합니다.';
+  const { opportunities, risks } = buildOpportunityRiskFactors(data);
+
+  function renderItem(f, kind) {
+    const lvlClass = `orf-level-${escapeHtml(f.level || 'medium')}`;
+    const iconClass = kind === 'opp' ? 'orf-icon-opp' : 'orf-icon-risk';
+    const icon = kind === 'opp' ? '✓' : '⚠';
+    return `
+      <li class="orf-item ${iconClass} ${lvlClass}">
+        <div class="orf-item-head">
+          <span class="orf-item-icon" aria-hidden="true">${icon}</span>
+          <span class="orf-item-title">${escapeHtml(f.title)}</span>
+        </div>
+        <p class="orf-item-desc">${escapeHtml(f.description)}</p>
+        <span class="orf-item-src">${escapeHtml(f.source)}</span>
+      </li>`;
+  }
+
+  const oppHtml = opportunities.length
+    ? `<ul class="orf-list">${opportunities.map(o => renderItem(o, 'opp')).join('')}</ul>`
+    : `<p class="orf-empty">${ORF_EMPTY}</p>`;
+  const riskHtml = risks.length
+    ? `<ul class="orf-list">${risks.map(r => renderItem(r, 'risk')).join('')}</ul>`
+    : `<p class="orf-empty">${ORF_EMPTY}</p>`;
+
+  return `
+    <div class="opportunity-risk-block">
+      <div class="orf-grid">
+        <div class="orf-card orf-card-opp">
+          <div class="orf-card-head">
+            <span class="orf-card-icon orf-card-icon-opp" aria-hidden="true">✓</span>
+            <h3 class="orf-card-title">기회 요인 Top 3</h3>
+          </div>
+          ${oppHtml}
+        </div>
+        <div class="orf-card orf-card-risk">
+          <div class="orf-card-head">
+            <span class="orf-card-icon orf-card-icon-risk" aria-hidden="true">⚠</span>
+            <h3 class="orf-card-title">주의 요인 Top 3</h3>
+          </div>
+          ${riskHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderResultSummary(d) {
   const final = d?.scores?.final || {};
   const finance = financeForResultView(d);
   const wrap = document.getElementById('result-summary');
+  const decision = buildDecisionSummary(d);
 
   const breakEven = Number(finance.break_even || 0);
   const monthly   = Number(finance.monthly_sales || 0);
@@ -924,6 +2446,26 @@ function renderResultSummary(d) {
       : '';
 
   wrap.innerHTML = `
+    <div class="decision-summary-block">
+      <div class="decision-main-card">
+        <div class="decision-title">의사결정 요약</div>
+        <div class="decision-line decision-conclusion"><strong>종합 결론</strong> ${escapeHtml(decision.conclusion)}</div>
+        <div class="decision-line decision-risk"><strong>핵심 리스크</strong> ${escapeHtml(decision.risk)}</div>
+        <div class="decision-line decision-action"><strong>우선 실행 과제</strong> ${escapeHtml(decision.action)}</div>
+      </div>
+      <div class="decision-metric-grid">
+        ${decision.metrics.map(m => `
+          <div class="decision-metric-card">
+            <div class="decision-metric-label">${escapeHtml(m.label)}</div>
+            <div class="decision-metric-value">${escapeHtml(m.value)}</div>
+            <div class="decision-metric-helper">${escapeHtml(m.helper)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    ${renderOpportunityRiskFactorsHtml(d)}
+
     <div class="summary-head">
       <div>
         <div class="summary-eyebrow">${d.user_type || ''} · ${d.area_name || '-'} · ${d.service_name || '-'}</div>
@@ -1040,6 +2582,321 @@ const SCORE_TOOLTIP_HELP = {
   },
 };
 
+/** 점수 카드·근거 보기용 라벨 (renderScoreGrid 순서와 동일) */
+const SCORE_GRID_LABEL_BY_KEY = {
+  attraction: '상권 매력도',
+  growth: '매출 성장성',
+  competition: '경쟁 강도',
+  population: '유동인구 적합도',
+  ecosystem: '점포 생태계',
+  survival: '업종 생존성',
+  rent: '임대료 부담',
+  debt: '부채 체력',
+  shinhan_bank: '금융 점검 필요성',
+  shinhan_card: '카드 활용도',
+  shinhan_life: '보험 점검 필요성',
+  shinhan_growth: '성장지원 가능성',
+};
+
+function normalizeReasonBulletArray(raw) {
+  if (!raw) return [];
+  const arr = Array.isArray(raw) ? raw : [raw];
+  return arr
+    .map(x => {
+      if (typeof x === 'string') return x.trim();
+      if (x != null && typeof x === 'object') {
+        if (x.text != null) return String(x.text).trim();
+        if (x.line != null) return String(x.line).trim();
+      }
+      return String(x ?? '').trim();
+    })
+    .filter(Boolean);
+}
+
+function pickScoreReasonFromApi(scoreKey, data) {
+  if (!data || typeof data !== 'object') return null;
+  const pickFromObject = (obj) => {
+    if (!obj || typeof obj !== 'object') return null;
+    const v = obj[scoreKey];
+    if (v == null || v === '') return null;
+    if (Array.isArray(v)) return normalizeReasonBulletArray(v);
+    if (typeof v === 'string') {
+      return v.split(/\n+|•|;|·/).map(s => s.trim()).filter(Boolean);
+    }
+    if (typeof v === 'object') {
+      if (Array.isArray(v.bullets)) return normalizeReasonBulletArray(v.bullets);
+      if (Array.isArray(v.lines)) return normalizeReasonBulletArray(v.lines);
+      if (v.reason != null) return normalizeReasonBulletArray([v.reason]);
+      if (v.detail != null) return normalizeReasonBulletArray([v.detail]);
+    }
+    return null;
+  };
+  const fromSr = pickFromObject(data.score_reasons);
+  if (fromSr && fromSr.length) return fromSr;
+  const fromEx = pickFromObject(data.explanations);
+  if (fromEx && fromEx.length) return fromEx;
+  const fromSd = pickFromObject(data.score_details);
+  if (fromSd && fromSd.length) return fromSd;
+  return null;
+}
+
+/** 양호/보통/열위 등 근거 문구용 구간 (위험형 지표는 점수가 높을수록 불리) */
+function scoreSituationBand(scoreKey, scoreValue) {
+  const meta = SCORE_TOOLTIP_HELP[scoreKey];
+  const neg = meta && meta.dir === 'negative';
+  const v = Number(scoreValue);
+  if (!Number.isFinite(v)) return 'moderate';
+  if (!neg) {
+    if (v >= 62) return 'good';
+    if (v >= 42) return 'moderate';
+    return 'poor';
+  }
+  if (v >= 58) return 'poor';
+  if (v >= 38) return 'moderate';
+  return 'good';
+}
+
+function buildFallbackScoreReasonBullets(scoreKey, scoreValue, data) {
+  const band = scoreSituationBand(scoreKey, scoreValue);
+  const finance = typeof financeForResultView === 'function' ? financeForResultView(data || {}) : {};
+  const cm = Number(finance.cash_months);
+  const monthly = Number(finance.monthly_sales || 0);
+  const be = Number(finance.break_even || 0);
+
+  const F = {
+    attraction: {
+      poor: [
+        '상권 내 수요 기반이 제한적일 수 있습니다.',
+        '매출 규모 또는 집객 요인이 비교 상권 대비 낮은 편입니다.',
+        '유동·상주·직장 인구 반영 결과가 보수적으로 나왔을 수 있습니다.',
+      ],
+      moderate: [
+        '상권 활력은 무난한 구간으로 추정됩니다.',
+        '추정매출·유동 등 요약 지표를 함께 참고하는 편이 좋습니다.',
+      ],
+      good: [
+        '유동·추정매출 등 활력 요인이 비교적 유리한 편입니다.',
+        '동일 상권 내 다른 업종 대비 후보 업종 적합도를 함께 검토하세요.',
+      ],
+    },
+    growth: {
+      poor: [
+        '매출 추이 데이터가 부족하거나 변동성이 커 보일 수 있습니다.',
+        '최근 분기 대비 하락 기미가 있으면 성장성 판단이 보수적으로 나옵니다.',
+      ],
+      moderate: [
+        '매출 추이는 중간 수준으로 해석됩니다.',
+        '추세 전환 여부는 분기 단위로 재점검하는 편이 좋습니다.',
+      ],
+      good: [
+        '최근 매출 흐름이 양호하게 나타납니다.',
+        monthly > 0 && be > 0 && monthly >= be
+          ? '손익분기점 대비 예상 매출 여력이 있는 편으로 함께 계산되었습니다.'
+          : '상권 평균 추세와 비교해 성장 신호가 상대적으로 나타납니다.',
+      ],
+    },
+    competition: {
+      poor: [
+        '동일 업종 점포 수가 많거나 증가 추세로 관측될 수 있습니다.',
+        '반경 내 경쟁점 수가 많을 가능성이 있습니다.',
+      ],
+      moderate: [
+        '경쟁 밀도는 중간 수준으로 추정됩니다.',
+        '차별화·입지 요건을 함께 검토하는 편이 좋습니다.',
+      ],
+      good: [
+        '동일 업종 밀도가 상대적으로 완만한 편으로 계산되었을 수 있습니다.',
+        '그래도 준공·입점 등으로 향후 변동은 지속 관측이 필요합니다.',
+      ],
+    },
+    population: {
+      poor: [
+        '유동 규모 또는 증감 추세가 후보 업종에 불리할 수 있습니다.',
+        '길단위·상주·직장 인구 합성 결과가 보수적으로 나왔을 수 있습니다.',
+      ],
+      moderate: [
+        '유동인구 적합도는 보통 구간입니다.',
+        '시간대별 편차가 크면 입지·캐파 조건을 따로 확인해야 합니다.',
+      ],
+      good: [
+        '선택 업종과 유동인구 패턴이 비교적 잘 맞습니다.',
+        '상주·직장·길단위 인구를 함께 반영했습니다.',
+      ],
+    },
+    ecosystem: {
+      poor: [
+        '개업·폐업 흐름이 안정적이지 않을 수 있습니다.',
+        '상권변화지표 또는 폐업 관련 관측값을 추가로 확인해야 합니다.',
+      ],
+      moderate: [
+        '점포 생태계는 중간 수준으로 추정됩니다.',
+        '업종별 폐업률·상권 변동 신호를 함께 보는 편이 좋습니다.',
+      ],
+      good: [
+        '폐업률·상권 변동 신호가 비교적 안정적인 편으로 계산되었습니다.',
+        '그래도 신규 출점·입점은 지역 이벤트에 따라 달라질 수 있습니다.',
+      ],
+    },
+    survival: {
+      poor: [
+        '공개 통계 기준 업종 생존 신호가 보수적으로 나왔을 수 있습니다.',
+        '브랜드·운영 역량은 별도로 검토해야 합니다.',
+      ],
+      moderate: [
+        '업종 평균 대비 생존 신호는 중간 구간입니다.',
+        '지역·규모별 편차가 크므로 참고용으로만 활용하세요.',
+      ],
+      good: [
+        '통계 기준 업종 생존 신호가 비교적 양호한 편입니다.',
+        '실제 사업계획·마진 구조와 함께 판단해야 합니다.',
+      ],
+    },
+    rent: {
+      poor: [
+        '임대료 수준 또는 변동 신호가 부담으로 해석될 수 있습니다.',
+        '고정비 구조와 함께 손익 민감도를 점검하는 편이 좋습니다.',
+      ],
+      moderate: [
+        '임대료 부담은 중간 수준으로 추정됩니다.',
+        '계약 조건·인상 주기는 현장 확인이 필요합니다.',
+      ],
+      good: [
+        '임대료 부담은 상대적으로 완만한 편으로 계산되었을 수 있습니다.',
+        '실제 임차료·관리비는 계약서 기준으로 확인해야 합니다.',
+      ],
+    },
+    debt: {
+      poor: [
+        '현금보유개월 수가 충분히 길지 않습니다.',
+        '매출 감소 시 운영자금 여력이 줄어들 수 있습니다.',
+        Number.isFinite(cm) && cm < 6
+          ? `추정 현금버퍼는 약 ${cm.toFixed(1)}개월 수준입니다.`
+          : '이자·고정비 대비 매출 비중을 함께 확인해야 합니다.',
+      ].filter(Boolean),
+      moderate: [
+        '부채·현금 흐름 체력은 보통 구간으로 추정됩니다.',
+        '매출·비용 가정이 바뀌면 민감하게 변할 수 있습니다.',
+      ],
+      good: [
+        '이자부담·현금버퍼 신호가 비교적 양호한 편입니다.',
+        '실제 금리·상환 조건은 금융기관 조건과 다를 수 있습니다.',
+      ],
+    },
+    shinhan_bank: {
+      poor: [
+        '초기 자금 공백 또는 현금흐름 점검이 필요할 수 있습니다.',
+        '금리·한도·대출 가능 여부는 실제 상담으로 확인해야 합니다.',
+        '본 표시는 특정 상품을 제안하는 것이 아닙니다.',
+      ],
+      moderate: [
+        '금융 구조 점검 필요 신호가 중간 수준입니다.',
+        '부채·현금 흐름은 입력값 변화에 민감합니다.',
+      ],
+      good: [
+        '진단 스냅샷상 긴급 상담 필요 신호는 상대적으로 낮은 편입니다.',
+        '그래도 예비 자금 계획은 주기적으로 점검하는 편이 좋습니다.',
+      ],
+    },
+    shinhan_card: {
+      poor: [
+        '매출 변동·경쟁 신호를 바탕으로 결제·매출 관리 점검이 유리할 수 있습니다.',
+        '시간대별 매출 편차가 크면 운영 계획을 재확인해야 합니다.',
+      ],
+      moderate: [
+        '카드·결제 관련 점검 필요도는 중간 수준입니다.',
+        '업종·포맷에 따라 우선순위가 달라질 수 있습니다.',
+      ],
+      good: [
+        '카드 관련 점검 신호는 상대적으로 낮은 편으로 계산되었습니다.',
+        '매출 구조는 분기별로 재확인하는 편이 좋습니다.',
+      ],
+    },
+    shinhan_life: {
+      poor: [
+        '업종 특성상 화재·배상 등 보장 공백 점검이 필요할 수 있습니다.',
+        '실제 가입 여부·약관은 별도 확인이 필요합니다.',
+      ],
+      moderate: [
+        '보장 점검 필요 신호는 중간 수준입니다.',
+        '업종 키워드 가중치에 따라 달라질 수 있습니다.',
+      ],
+      good: [
+        '보장 점검 필요 신호는 상대적으로 낮은 편입니다.',
+        '그래도 사업장 규모·임직원 여부에 따라 요구가 달라질 수 있습니다.',
+      ],
+    },
+    shinhan_growth: {
+      poor: [
+        '성장·확장 검토 신호가 보수적으로 나왔을 수 있습니다.',
+        '재무·상권 조건이 함께 맞아야 의미가 있습니다.',
+      ],
+      moderate: [
+        '성장지원 검토 여지는 중간 구간으로 추정됩니다.',
+        '종합 점수와 재무 스냅샷을 함께 보세요.',
+      ],
+      good: [
+        '매력도·성장·부채 체력 신호를 종합해 검토 여지가 있는 편입니다.',
+        '지원 가능 여부는 기관·프로그램별로 다릅니다.',
+      ],
+    },
+  };
+
+  const pack = F[scoreKey];
+  if (!pack) return [];
+  const bullets = pack[band] || pack.moderate || [];
+  return normalizeReasonBulletArray(bullets).slice(0, 4);
+}
+
+/**
+ * 점수 카드·툴팁 공통: 근거 불릿 2~4개 (텍스트만).
+ * API의 score_reasons / explanations / score_details 우선, 없으면 점수 구간·재무 스냅샷 기반 fallback.
+ */
+function buildScoreReason(scoreKey, scoreLabel, scoreValue, data) {
+  const sc = data?.scores?.[scoreKey];
+  const v = Number(scoreValue);
+  const scoreNum = Number.isFinite(v) ? v : Number(sc?.score ?? NaN);
+
+  const apiLines = pickScoreReasonFromApi(scoreKey, data);
+  if (apiLines && apiLines.length) {
+    const merged = normalizeReasonBulletArray(apiLines).slice(0, 4);
+    if (merged.length >= 2) return merged;
+    const fb = buildFallbackScoreReasonBullets(scoreKey, scoreNum, data);
+    const fill = [...merged];
+    for (const b of fb) {
+      if (fill.length >= 4) break;
+      if (!fill.includes(b)) fill.push(b);
+    }
+    return fill.slice(0, 4);
+  }
+
+  const fromScoreObj = [];
+  if (sc?.reason && String(sc.reason).trim()) {
+    fromScoreObj.push(String(sc.reason).replace(/<[^>]+>/g, '').trim());
+  }
+  if (sc?.message && String(sc.message).trim()) {
+    const m = String(sc.message).replace(/<[^>]+>/g, '').trim();
+    if (m && m !== fromScoreObj[0]) fromScoreObj.push(m);
+  }
+
+  const fb = buildFallbackScoreReasonBullets(scoreKey, scoreNum, data);
+  const out = [];
+  const seen = new Set();
+  for (const line of [...fromScoreObj, ...fb]) {
+    const t = String(line).trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= 4) break;
+  }
+
+  if (out.length >= 2) return out.slice(0, 4);
+  if (out.length === 1 && fb.length) {
+    const extra = fb.filter(b => b !== out[0]).slice(0, 3);
+    return normalizeReasonBulletArray([...out, ...extra]).slice(0, 4);
+  }
+  return fb.length ? fb.slice(0, 4) : [];
+}
+
 function escapeHtml(str) {
   if (str == null || str === '') return '';
   return String(str)
@@ -1049,10 +2906,17 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-function buildScoreTooltipBody(k, sc) {
+function buildScoreTooltipBody(k, sc, data) {
   const base = SCORE_TOOLTIP_HELP[k];
   if (!base) return '';
   const parts = [];
+  const label = SCORE_GRID_LABEL_BY_KEY[k] || k;
+  const reasons = buildScoreReason(k, label, Number(sc?.score), data || {});
+  if (reasons.length) {
+    parts.push(
+      `<div class="st-block st-reason-block"><div class="st-label">참고 근거 요약</div><ul class="st-reason-ul">${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul><p class="st-reason-note">데이터·룰 기반 참고 설명이며 확정 판단이나 금융상품 제안이 아닙니다.</p></div>`,
+    );
+  }
   parts.push(`<div class="st-block"><div class="st-label">산출 방법</div><p class="st-text">${base.calc}</p></div>`);
   parts.push(`<div class="st-block"><div class="st-label">점수 보는 법</div><p class="st-text">${base.interp}</p></div>`);
 
@@ -1104,7 +2968,11 @@ function renderScoreGrid(d) {
     const direction = sc.direction === 'negative' ? 'risk' : 'fit';
     const score = (sc.score || 0).toFixed?.(0) || sc.score;
     const ttId = `score-tt-${k}`;
-    const tipBody = buildScoreTooltipBody(k, sc);
+    const tipBody = buildScoreTooltipBody(k, sc, d);
+    const reasons = buildScoreReason(k, name, Number(sc.score), d);
+    const reasonUl = reasons.length
+      ? `<ul class="score-reason-list">${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`
+      : `<p class="score-reason-fallback">참고 근거 요약을 불러오지 못했습니다. 상단의 i 버튼으로 산출 요약을 확인해 주세요.</p>`;
     return `
       <div class="score-card-wrap">
         <div class="score-card ${direction}">
@@ -1117,6 +2985,13 @@ function renderScoreGrid(d) {
             <span class="score-value">${score}</span>
             <span class="score-label" style="color:${sc.color || '#374151'}">${sc.label || '-'}</span>
           </div>
+          <details class="score-reason-details">
+            <summary class="score-reason-summary"><span class="score-reason-summary-text">근거 보기</span></summary>
+            <div class="score-reason-panel">
+              ${reasonUl}
+              <p class="score-reason-note">데이터·룰 기반 참고 설명이며 확정 판단이 아닙니다.</p>
+            </div>
+          </details>
         </div>
         <div class="score-tooltip" id="${ttId}" role="tooltip">
           <div class="score-tooltip-title">${name}</div>
@@ -1130,9 +3005,18 @@ function renderScoreGrid(d) {
 function renderOverviewTab(d) {
   const ss = d?.store_summary || {};
   const wrap = document.getElementById('tab-overview');
+  const startupBlock = renderStartupOverviewExtras(d);
+  const storeCount = Number(ss.store_count || 0);
+  const openCount = Number(ss.open_count || 0);
+  const closeCount = Number(ss.close_count || 0);
+  const franchiseCount = Number(ss.franchise_count || 0);
+  const closureRateNum = parseFloat(String(ss.closure_rate || '').replace('%', ''));
+  const franchiseRatio = storeCount > 0 ? ((franchiseCount / storeCount) * 100).toFixed(1) : null;
+  const openCloseGap = openCount - closeCount;
   wrap.innerHTML = `
     <h3 class="tab-title">상권 종합 진단</h3>
     <p class="tab-desc">선택 상권의 점포·인구·운영 지표 요약입니다.</p>
+    ${startupBlock}
     <div class="kpi-grid">
       ${kpi('점포 수',          fmtInt(ss.store_count))}
       ${kpi('개업 점포',        fmtInt(ss.open_count))}
@@ -1145,10 +3029,49 @@ function renderOverviewTab(d) {
     </div>
 
     <div class="info-box">
+      <div class="info-title">상권 요약</div>
+      <div class="info-body">
+        <ul class="insight-list">
+          <li><strong>점포 밀도:</strong> ${storeCount > 0 ? `상권 기준 점포 <b>${fmtInt(storeCount)}개</b>가 관측됩니다.` : '현재 상권 기준 점포 데이터가 매우 적거나 0으로 관측됩니다.'}</li>
+          <li><strong>개·폐업 흐름:</strong> ${Number.isFinite(openCloseGap) ? `개업 ${fmtInt(openCount)}개 / 폐업 ${fmtInt(closeCount)}개로 ${openCloseGap >= 0 ? '순증' : '순감'} <b>${fmtInt(Math.abs(openCloseGap))}개</b>입니다.` : '개·폐업 추세 데이터가 제한적입니다.'}</li>
+          <li><strong>브랜드 집중도:</strong> ${franchiseRatio != null ? `프랜차이즈 비중은 약 <b>${franchiseRatio}%</b> 수준입니다.` : '프랜차이즈 비중 데이터가 충분하지 않습니다.'}</li>
+          <li><strong>폐업 리스크:</strong> ${Number.isFinite(closureRateNum) ? `최근 폐업률은 <b>${ss.closure_rate}</b>로, ${closureRateNum >= 10 ? '운영 안정성 점검이 필요한 구간입니다.' : '상대적으로 관리 가능한 구간으로 보입니다.'}` : '폐업률 데이터가 제한적입니다.'}</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="overview-radius-note"></div>
+
+    <div class="info-box">
       <div class="info-title">데이터 기반 해석</div>
-      <div class="info-body">${overviewNarrative(d)}</div>
+      <div class="info-body">${overviewNarrative(d)}${isPreStartupUser(d) ? '<br><br>' + overviewStartupExtraLine(d) : ''}</div>
     </div>
   `;
+
+  // 점포 수가 매우 적은 경우 반경 확장 안내를 상권요약 탭에서도 즉시 노출
+  if (storeCount <= 0) {
+    ensureRadiusExpansionForTrend().then(() => {
+      const note = document.getElementById('overview-radius-note');
+      if (!note) return;
+      const rx = State.radiusExpansion;
+      if (rx && rx.message) {
+        note.innerHTML = `<div class="info-box trend-radius-notice"><div class="info-title">점포 데이터 확장 안내</div><div class="info-body">${escapeHtml(
+          rx.message,
+        )}</div></div>`;
+      } else {
+        note.innerHTML = `<div class="info-box trend-radius-notice"><div class="info-title">점포 데이터 확장 안내</div><div class="info-body">선택 상권에서 점포 수가 0으로 관측되어, 주변 반경(최대 2km) 참고 데이터까지 함께 확인하는 것을 권장합니다.</div></div>`;
+      }
+    });
+  }
+}
+
+function overviewStartupExtraLine(d) {
+  const f = financeForResultView(d);
+  const gap = Number(f.funding_gap_estimate || 0);
+  if (gap <= 0) {
+    return '<b>예비창업 관점:</b> 초기 소요 대비 자기자본이 비교적 맞춰진 편으로 계산되었습니다. 다만 권장 운영자금(약 3개월 고정비)은 별도 확보를 검토하세요.';
+  }
+  return `<b>예비창업 관점:</b> 초기 소요 대비 약 <b>${fmtMoney(gap)}</b> 규모의 조달이 필요할 수 있다는 참고치입니다. 「자금·손익분기점」 탭에서 창업비·자기자본을 바꿔 시뮬레이션할 수 있습니다.`;
 }
 
 function overviewNarrative(d) {
@@ -1238,6 +3161,19 @@ function destroyMapView() {
     if (State.mapEngine === 'leaflet' && State.map && typeof State.map.remove === 'function') {
       State.map.remove();
     }
+    if (State.mapEngine === 'kakao' && State.map && window.kakao && window.kakao.maps) {
+      (State.mapMarkers || []).forEach((m) => {
+        try {
+          if (m.marker && typeof m.marker.setMap === 'function') m.marker.setMap(null);
+          if (m.infoWindow && typeof m.infoWindow.close === 'function') m.infoWindow.close();
+        } catch (_) {}
+      });
+      Object.values(State.circles || {}).forEach((c) => {
+        try {
+          if (c && typeof c.setMap === 'function') c.setMap(null);
+        } catch (_) {}
+      });
+    }
   } catch (e) { /* noop */ }
   State.map = null;
   State.mapEngine = null;
@@ -1248,6 +3184,7 @@ function destroyMapView() {
 }
 
 let _leafletLoadPromise = null;
+let _kakaoLoadPromise = null;
 function ensureLeaflet() {
   if (window.L) return Promise.resolve();
   if (!_leafletLoadPromise) {
@@ -1275,13 +3212,112 @@ function ensureLeaflet() {
   return _leafletLoadPromise;
 }
 
-// ── Tab: 경쟁점 지도 (OpenStreetMap · Leaflet 전용 — 카카오 지도 SDK 미사용) ─
+async function fetchMapConfig() {
+  try {
+    return await fetchJson('/api/map-config');
+  } catch (_) {
+    return { provider: 'leaflet', configured: false, kakao_js_app_key: '' };
+  }
+}
+
+function ensureKakaoMaps(jsKey) {
+  if (!jsKey) return Promise.reject(new Error('카카오 JavaScript 키가 없습니다.'));
+  if (window.kakao && window.kakao.maps) {
+    return new Promise((resolve) => {
+      window.kakao.maps.load(() => resolve());
+    });
+  }
+  if (!_kakaoLoadPromise) {
+    _kakaoLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(jsKey)}&autoload=false`;
+      s.onload = () => {
+        try {
+          window.kakao.maps.load(() => resolve());
+        } catch (e) {
+          reject(e);
+        }
+      };
+      s.onerror = () => reject(new Error('kakao sdk'));
+      document.head.appendChild(s);
+    });
+  }
+  return _kakaoLoadPromise;
+}
+
+/** 결과 데이터 기준 입지·경쟁 요약 카드 (GIS 탭 우측 상단) */
+function buildMapInsightCardHtml(d) {
+  const data = d || State.result;
+  if (!data) return '';
+  const area = escapeHtml(data.area_name || State.area_name || '-');
+  const svc = escapeHtml(data.service_name || State.service_name || '-');
+  const att = data.scores?.attraction;
+  const comp = data.scores?.competition;
+  const pop = data.scores?.population;
+  const warns = Array.isArray(data.warnings) ? data.warnings.length : 0;
+  const lines = [];
+  if (att && Number.isFinite(att.score)) {
+    lines.push(`상권 매력도 <strong>${escapeHtml(String(att.score))}점</strong> (${escapeHtml(att.label || '-')})`);
+  }
+  if (comp && Number.isFinite(comp.score)) {
+    lines.push(`경쟁 강도 <strong>${escapeHtml(String(comp.score))}점</strong> (${escapeHtml(comp.label || '-')}) · 높을수록 경쟁 치열`);
+  }
+  if (pop && Number.isFinite(pop.score)) {
+    lines.push(`유동인구 적합도 <strong>${escapeHtml(String(pop.score))}점</strong>`);
+  }
+  if (warns > 0) {
+    lines.push(`조기경보 <strong>${warns}</strong>건 · 추세·경쟁 신호를 함께 보세요.`);
+  }
+  if (!lines.length) {
+    lines.push('점수 요약을 불러오지 못했습니다. 상단 종합 점수 카드를 참고하세요.');
+  }
+  return `
+    <div class="map-insight-card">
+      <div class="map-insight-kicker">입지 스냅샷</div>
+      <div class="map-insight-area">${area} · ${svc}</div>
+      <ul class="map-insight-list">${lines.map((li) => `<li>${li}</li>`).join('')}</ul>
+      <p class="map-insight-note">본 탭은 반경 내 점포 밀도와 검색 위치를 시각화합니다. 행정 경계·축 미세 분석은 외부 GIS와 결합할 수 있습니다.</p>
+    </div>`;
+}
+
+function mapPublicDataMoreHtml() {
+  return `
+    <details class="map-data-more">
+      <summary class="map-data-more-sum">추가로 연계하면 좋은 공공·참고 데이터</summary>
+      <div class="map-data-more-body">
+        <p class="map-data-more-lead">현재 PoC는 서울시 상권·점포·추정매출 등 핵심 공공데이터에 집중합니다. 입지 분석을 더 풍부하게 만들려면 아래를 검토할 수 있습니다.</p>
+        <ul class="map-data-more-ul">
+          <li><strong>SGIS·행정경계·격자</strong> — 통계청·행안부 기준 격자 단위 인구·가구 (KOSIS·SGIS API)</li>
+          <li><strong>V-World·건축물대장</strong> — 건물 용도·연면적·층수로 임대 적합도 보조 판단</li>
+          <li><strong>대중교통·접근성</strong> — 지하철 승하차·버스 정류장 거리 (공공데이터포털·TAGO 등)</li>
+          <li><strong>실측 유동인구·통행량</strong> — 일부는 유료·제한 API (통신·카드사 OD 등) — 라이선스·개인정보 이슈 검토 필요</li>
+          <li><strong>상가 임대 호가·상가 정보</strong> — 소상공인365·민간 매물과 병합 시 입지 비교에 유리</li>
+        </ul>
+        <p class="map-data-more-ref">
+          참고: <a href="https://bigdata.sbiz.or.kr/#/gis/locAnls" target="_blank" rel="noopener noreferrer">소상공인365 입지·GIS 분석</a>과 유사한 관점으로 확장할 수 있습니다. (외부 서비스이며 본 PoC와 무관합니다.)
+        </p>
+      </div>
+    </details>`;
+}
+
+// ── Tab: 경쟁점 지도 (카카오맵 우선, 실패 시 Leaflet fallback) ─
 async function renderMapTab() {
   destroyMapView();
   const wrap = document.getElementById('tab-map');
+  const insight = buildMapInsightCardHtml(State.result);
+  const dataMore = mapPublicDataMoreHtml();
   wrap.innerHTML = `
-    <h3 class="tab-title">경쟁점 지도</h3>
-    <p class="tab-desc">OpenStreetMap 기반 지도(Leaflet)로 동일·유사 업종 점포를 표시합니다. 검색으로 다른 위치를 고르면 그 좌표 기준으로 경쟁점이 다시 계산됩니다.</p>
+    <div class="map-gis-head">
+      <div class="map-gis-head-text">
+        <div class="map-gis-eyebrow">GIS · 입지·경쟁 분석</div>
+        <h3 class="tab-title map-gis-title">경쟁점 지도</h3>
+        <p class="tab-desc map-gis-desc">
+          <strong>선택한 상권·업종 기준</strong>으로 경쟁 환경을 해석합니다. 장소 검색으로 분석 중심을 옮기면 그 좌표 기준으로 경쟁점이 다시 계산됩니다.
+        </p>
+        <p class="tab-note map-gis-note muted">홈의 「지도 기반 상권 탐색」은 관심 위치를 먼저 둘러본 뒤 진단을 시작하는 화면입니다. 이 탭은 분석 결과 설명용입니다.</p>
+      </div>
+    </div>
+
     <div class="map-toolbar">
       <div class="map-legend">
         <span class="legend-item"><span class="legend-dot" style="background:#3b82f6"></span>300m</span>
@@ -1292,63 +3328,68 @@ async function renderMapTab() {
       </div>
       <div class="map-style-toggle" id="map-style-toggle">
         <button class="map-style-btn active" data-style="ROADMAP" data-leaflet-style="voyager">기본</button>
-        <button class="map-style-btn" data-style="HYBRID" data-leaflet-style="light">라이트</button>
-        <button class="map-style-btn" data-style="SKYVIEW" data-leaflet-style="dark">다크</button>
+        <button class="map-style-btn" data-style="SKYVIEW" data-leaflet-style="light">위성</button>
+        <button class="map-style-btn" data-style="HYBRID" data-leaflet-style="dark">하이브리드</button>
       </div>
     </div>
-    <div class="map-grid">
-      <div class="map-container">
-        <div id="competitor-map" style="height:540px"></div>
-        <div class="map-search">
-          <input type="text" id="map-place-q" placeholder="장소 검색 (예: 강남역 스타벅스) · 서버 키 설정 시 카카오 로컬 검색">
-          <button class="btn btn-primary btn-sm" id="map-place-go">검색</button>
-          <button class="btn btn-ghost btn-xs" id="map-place-reset" title="원래 상권 중심으로 돌아가기">초기화</button>
-          <div class="map-search-results" id="map-place-results"></div>
-        </div>
-      </div>
-      <div class="competitor-side" id="competitor-side">
-        <div class="side-head">
-          <div class="side-title">반경별 경쟁점 리스트</div>
-          <div class="side-filter">
-            <button class="dist-btn active" data-r="300">300m</button>
-            <button class="dist-btn" data-r="500">500m</button>
-            <button class="dist-btn" data-r="1000">1km</button>
-            <label class="same-only"><input type="checkbox" id="chk-same-only" checked> 동일업종만</label>
+
+    <div class="map-grid map-gis-grid">
+      <div class="map-stage">
+        <div class="map-container map-container-elevated">
+          <div id="competitor-map" style="height:560px"></div>
+          <div class="map-search">
+            <input type="text" id="map-place-q" placeholder="장소 검색 (예: 강남역 스타벅스) · 서버 키 설정 시 카카오 로컬 검색">
+            <button class="btn btn-primary btn-sm" id="map-place-go">검색</button>
+            <button class="btn btn-ghost btn-xs" id="map-place-reset" title="원래 상권 중심으로 돌아가기">초기화</button>
+            <div class="map-search-results" id="map-place-results"></div>
           </div>
         </div>
-        <div class="side-list" id="competitor-list">로딩 중…</div>
-        <div class="side-interp" id="competitor-interp"></div>
+      </div>
+
+      <div class="map-sidebar-col">
+        ${insight}
+        <div class="competitor-side" id="competitor-side">
+          <div class="side-head">
+            <div class="side-title">반경별 경쟁점 리스트</div>
+            <div class="side-filter">
+              <button class="dist-btn active" data-r="300">300m</button>
+              <button class="dist-btn" data-r="500">500m</button>
+              <button class="dist-btn" data-r="1000">1km</button>
+              <label class="same-only"><input type="checkbox" id="chk-same-only" checked> 동일업종만</label>
+            </div>
+          </div>
+          <div class="side-list" id="competitor-list">로딩 중…</div>
+          <div class="side-interp" id="competitor-interp"></div>
+        </div>
+        ${dataMore}
       </div>
     </div>
     <div class="competitor-summary" id="competitor-summary">로딩 중…</div>
   `;
 
-  const [leafRes, dataRes] = await Promise.allSettled([
-    ensureLeaflet(),
-    fetchCompetitorsPayload(),
-  ]);
-
-  if (leafRes.status === 'rejected') {
-    const err = leafRes.reason;
-    showMapDisabled(err && err.message ? err.message : String(err));
-    if (dataRes.status === 'fulfilled') {
-      const data = dataRes.value;
-      State.competitors = (data.stores || []).map((s, i) => ({ ...s, _idx: i }));
-      if (data.radius_expansion) State.radiusExpansion = data.radius_expansion;
-      State.competitorExpansion = {
-        expansion: data.expansion || null,
-        extended_same: data.extended_same || [],
-        reference_nearby_other: data.reference_nearby_other || [],
-      };
-      renderCompetitorSummary(data);
-      renderCompetitorList();
-      renderCompetitorInterpretation(data);
+  const cfg = await fetchMapConfig();
+  const prov = String(cfg.provider || 'auto').toLowerCase();
+  let mapBoot = null;
+  let usingKakao = false;
+  if ((prov === 'kakao' || prov === 'auto') && cfg.configured && cfg.kakao_js_app_key) {
+    mapBoot = await Promise.allSettled([ensureKakaoMaps(cfg.kakao_js_app_key), fetchCompetitorsPayload()]);
+    if (mapBoot[0].status !== 'fulfilled') {
+      console.warn('[result-map] Kakao fallback to Leaflet:', mapBoot[0].reason);
+      mapBoot = await Promise.allSettled([ensureLeaflet(), Promise.resolve(mapBoot[1].status === 'fulfilled' ? mapBoot[1].value : null)]);
+      usingKakao = false;
     } else {
-      document.getElementById('competitor-summary').innerHTML =
-        '<div class="info-box"><div class="info-body">경쟁점 데이터를 불러오지 못했습니다.</div></div>';
-      document.getElementById('competitor-list').innerHTML =
-        '<div class="muted">데이터를 불러오지 못했습니다.</div>';
+      usingKakao = true;
     }
+  } else {
+    mapBoot = await Promise.allSettled([ensureLeaflet(), fetchCompetitorsPayload()]);
+    usingKakao = false;
+  }
+
+  const mapRes = mapBoot[0];
+  const dataRes = mapBoot[1];
+  if (mapRes.status === 'rejected') {
+    const err = mapRes.reason;
+    showMapDisabled(err && err.message ? err.message : String(err));
     return;
   }
 
@@ -1360,8 +3401,22 @@ async function renderMapTab() {
     return;
   }
 
-  State.mapEngine = 'leaflet';
-  applyCompetitorDraw(dataRes.value, { initial: true });
+  let payload = dataRes.value;
+  if (!payload) {
+    try {
+      payload = await fetchCompetitorsPayload();
+    } catch (_) {}
+  }
+  if (!payload) {
+    document.getElementById('competitor-summary').innerHTML =
+      '<div class="info-box"><div class="info-body">경쟁점 데이터를 불러오지 못했습니다.</div></div>';
+    document.getElementById('competitor-list').innerHTML =
+      '<div class="muted">데이터를 불러오지 못했습니다.</div>';
+    return;
+  }
+
+  State.mapEngine = usingKakao ? 'kakao' : 'leaflet';
+  applyCompetitorDraw(payload, { initial: true });
 
   document.querySelectorAll('.dist-btn').forEach(b => {
     b.addEventListener('click', () => {
@@ -1376,7 +3431,11 @@ async function renderMapTab() {
 
   document.querySelectorAll('.map-style-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      switchLeafletTiles(btn.dataset.leafletStyle || 'voyager', btn);
+      if (State.mapEngine === 'kakao') {
+        switchKakaoMapType(btn.dataset.style || 'ROADMAP', btn);
+      } else {
+        switchLeafletTiles(btn.dataset.leafletStyle || 'voyager', btn);
+      }
     });
   });
 
@@ -1489,7 +3548,8 @@ function applyCompetitorDraw(data, { initial = false } = {}) {
     extended_same: data.extended_same || [],
     reference_nearby_other: data.reference_nearby_other || [],
   };
-  drawLeafletMap(data, { initial });
+  if (State.mapEngine === 'kakao') drawKakaoMap(data, { initial });
+  else drawLeafletMap(data, { initial });
   renderCompetitorSummary(data);
   renderCompetitorList();
   renderCompetitorInterpretation(data);
@@ -1536,6 +3596,14 @@ function switchLeafletTiles(name, btn) {
   document.querySelectorAll('.map-style-btn').forEach(b => b.classList.toggle('active', b === btn));
 }
 
+function switchKakaoMapType(style, btn) {
+  if (!State.map || State.mapEngine !== 'kakao' || !(window.kakao && window.kakao.maps)) return;
+  const k = window.kakao.maps;
+  const typeId = style === 'HYBRID' ? k.MapTypeId.HYBRID : style === 'SKYVIEW' ? k.MapTypeId.SKYVIEW : k.MapTypeId.ROADMAP;
+  State.map.setMapTypeId(typeId);
+  document.querySelectorAll('.map-style-btn').forEach(b => b.classList.toggle('active', b === btn));
+}
+
 function drawLeafletMap(data, { initial }) {
   const L = window.L;
   const [lat, lon] = data.center || [37.5665, 126.9780];
@@ -1575,7 +3643,8 @@ function drawLeafletMap(data, { initial }) {
   L.marker(center, { icon: pin, zIndexOffset: 1000 }).addTo(State.map);
 
   State.mapMarkers = [];
-  State.competitors.forEach((s, i) => {
+  const drawTargets = (State.competitors || []).slice(0, MAP_MARKER_LIMIT_LEAFLET);
+  drawTargets.forEach((s, i) => {
     if (s['위도'] == null || s['경도'] == null) return;
     const same = !!s.is_same;
     const color = same ? '#1a56db' : '#94a3b8';
@@ -1599,12 +3668,76 @@ function drawLeafletMap(data, { initial }) {
   }
 }
 
+function drawKakaoMap(data, { initial }) {
+  if (!(window.kakao && window.kakao.maps)) return;
+  const k = window.kakao.maps;
+  const [lat, lon] = data.center || [37.5665, 126.9780];
+  const center = new k.LatLng(lat, lon);
+  const el = document.getElementById('competitor-map');
+  if (!el) return;
+
+  if (State.map && State.mapEngine === 'kakao') {
+    try {
+      (State.mapMarkers || []).forEach((m) => {
+        if (m.marker && typeof m.marker.setMap === 'function') m.marker.setMap(null);
+      });
+      Object.values(State.circles || {}).forEach((c) => c && c.setMap && c.setMap(null));
+    } catch (_) {}
+  }
+
+  State.map = new k.Map(el, { center, level: 4 });
+  State.mapEngine = 'kakao';
+  State.circles = {};
+  State.circles[1000] = new k.Circle({
+    center, radius: 1000, strokeWeight: 1.2, strokeColor: '#ef4444', strokeOpacity: 0.7, fillColor: '#ef4444', fillOpacity: 0.04,
+  });
+  State.circles[500] = new k.Circle({
+    center, radius: 500, strokeWeight: 1.2, strokeColor: '#16a34a', strokeOpacity: 0.7, fillColor: '#16a34a', fillOpacity: 0.06,
+  });
+  State.circles[300] = new k.Circle({
+    center, radius: 300, strokeWeight: 1.5, strokeColor: '#3b82f6', strokeOpacity: 0.8, fillColor: '#3b82f6', fillOpacity: 0.10,
+  });
+  Object.values(State.circles).forEach((c) => c.setMap(State.map));
+
+  State.mapMarkers = [];
+  const drawTargets = (State.competitors || []).slice(0, MAP_MARKER_LIMIT_KAKAO);
+  drawTargets.forEach((s) => {
+    if (s['위도'] == null || s['경도'] == null) return;
+    const same = !!s.is_same;
+    const dot = document.createElement('div');
+    dot.className = 'me-kakao-dot' + (same ? ' me-kakao-dot--on' : '');
+    dot.style.background = same ? '#1a56db' : '#94a3b8';
+    const marker = new k.CustomOverlay({
+      position: new k.LatLng(s['위도'], s['경도']),
+      content: dot,
+      yAnchor: 0.5,
+      zIndex: same ? 5 : 3,
+    });
+    marker.setMap(State.map);
+    State.mapMarkers.push({ marker, store: s, position: marker.getPosition() });
+  });
+
+  if (initial) State.map.setCenter(center);
+  focusRadius(State.activeRadius || 300);
+}
+
 function openStoreInfo(idx) {
   const m = State.mapMarkers[idx];
   if (!m || !State.map) return;
-  if (m.marker) {
+  if (State.mapEngine === 'leaflet' && m.marker) {
     m.marker.openPopup();
     State.map.flyTo(m.marker.getLatLng(), 17, { animate: true, duration: 0.45 });
+    return;
+  }
+  if (State.mapEngine === 'kakao' && window.kakao && window.kakao.maps && m.position) {
+    const k = window.kakao.maps;
+    const info = new k.InfoWindow({
+      content: `<div class="map-popup">${buildStorePopupHTML(m.store || {})}</div>`,
+      removable: true,
+    });
+    info.open(State.map, m.marker);
+    State.map.setCenter(m.position);
+    State.map.setLevel(3);
   }
 }
 
@@ -1708,21 +3841,39 @@ function panMapToStoreLatLng(lat, lon) {
   const la = Number(lat);
   const lo = Number(lon);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
-  State.map.setView([la, lo], 17, { animate: true });
+  if (State.mapEngine === 'leaflet') {
+    State.map.setView([la, lo], 17, { animate: true });
+  } else if (State.mapEngine === 'kakao' && window.kakao && window.kakao.maps) {
+    State.map.setCenter(new window.kakao.maps.LatLng(la, lo));
+    State.map.setLevel(3);
+  }
 }
 
 function focusRadius(r) {
   if (!State.map || !State.circles) return;
-  Object.entries(State.circles).forEach(([k, c]) => {
-    const active = Number(k) === r;
-    c.setStyle({
-      weight: active ? 3 : 1.2,
-      fillOpacity: active ? 0.18 : 0.04,
-      dashArray: active ? null : '6 6',
+  if (State.mapEngine === 'leaflet') {
+    Object.entries(State.circles).forEach(([k, c]) => {
+      const active = Number(k) === r;
+      c.setStyle({
+        weight: active ? 3 : 1.2,
+        fillOpacity: active ? 0.18 : 0.04,
+        dashArray: active ? null : '6 6',
+      });
     });
-  });
-  const z = r <= 300 ? 17 : r <= 500 ? 16 : 15;
-  State.map.setZoom(z);
+    const z = r <= 300 ? 17 : r <= 500 ? 16 : 15;
+    State.map.setZoom(z);
+  } else if (State.mapEngine === 'kakao') {
+    Object.entries(State.circles).forEach(([k, c]) => {
+      const active = Number(k) === r;
+      if (!c || !c.setOptions) return;
+      c.setOptions({
+        strokeWeight: active ? 3 : 1.2,
+        fillOpacity: active ? 0.18 : 0.05,
+      });
+    });
+    const level = r <= 300 ? 3 : r <= 500 ? 4 : 5;
+    State.map.setLevel(level);
+  }
 }
 
 function renderCompetitorList() {
@@ -1867,7 +4018,11 @@ async function mapPlaceSearch() {
 async function moveCenterToPlace(lat, lon, label) {
   State.customCenter = [lat, lon];
   if (State.map) {
-    State.map.setView([lat, lon], State.map.getZoom(), { animate: true });
+    if (State.mapEngine === 'leaflet') {
+      State.map.setView([lat, lon], State.map.getZoom(), { animate: true });
+    } else if (State.mapEngine === 'kakao' && window.kakao && window.kakao.maps) {
+      State.map.setCenter(new window.kakao.maps.LatLng(lat, lon));
+    }
   }
   await loadCompetitorsAndDraw({ initial: false });
 }
@@ -1908,6 +4063,8 @@ function renderFinanceTab(d) {
         ${State.finance_skipped ? '<b>사업 조건 입력을 건너뛴</b> 경우입니다. ' : ''}
         실제 컨설팅 시에는 <b>분석 시작</b> 단계에서 매출·임대료·인건비·대출 등을 입력해 주세요.
       </div>` : ''}
+
+    ${buildStartupSimulatorSection(d, f)}
 
     <div class="finance-charts-section">
       <h4 class="finance-charts-heading">그래프로 보는 자금·손익</h4>
@@ -1982,7 +4139,10 @@ function renderFinanceTab(d) {
     const bx = document.getElementById('shinhan-rate-box-result');
     if (bx) bx.textContent = '신한은행 금리 정보를 불러오지 못했습니다.';
   });
-  requestAnimationFrame(() => drawFinanceCharts(d));
+  requestAnimationFrame(() => {
+    drawFinanceCharts(d);
+    bindStartupSimulatorPanel(d);
+  });
 }
 
 function kpiTag(label, value, tagHtml) {
@@ -2163,12 +4323,28 @@ function renderServicesTab(d) {
     return;
   }
 
+  const preStartupBanner = isPreStartupUser(d)
+    ? `<div class="prestartup-services-banner">
+        <div class="prestartup-services-title">예비창업자 · 자금·대출 안내</div>
+        <p>
+          아래 <strong>신한은행</strong> 패널에는 <b>초기 소요(추정)</b>, <b>보유 현금 대비 자금 공백(추정)</b>, <b>창업자금·운영자금 상담 후보 금액(목업)</b>이 표시됩니다.
+          부족분은 전부 대출로 메웠다고 가정한 것이 아니라, <b>상담 시 참고할 규모</b>입니다. 실제 한도·금리·보증은 심사 후 확정됩니다.
+        </p>
+        <ul class="prestartup-services-list">
+          <li><strong>얼마나 필요한가:</strong> 진단 스냅샷의 초기 소요·자금 공백, 상품별 「추정 필요·참고 금액」 확인</li>
+          <li><strong>대출로 어느 정도까지:</strong> 목업 상품은 참고 범위(예: 창업자금 상담 후보 금액)로 표시되며, 「자금·손익분기점」 탭 시뮬레이터에서 조달액·월 이자를 가정해 볼 수 있습니다.</li>
+          <li><strong>버티는 기간:</strong> 현금 보유개월·운영자금 상품 후보는 분석 결과와 연동된 참고치입니다.</li>
+        </ul>
+      </div>`
+    : '';
+
   wrap.innerHTML = `
     <h3 class="tab-title">신한 서비스 연결</h3>
     <p class="tab-desc">
       진단 결과에 따라 우선 검토할 신한금융그룹 상담 후보입니다.
       <b>확정 추천이 아닌</b> 상담·점검 단계이며, 실제 상품 조건은 각 사 상담 및 심사 결과에 따릅니다.
     </p>
+    ${preStartupBanner}
     <div class="shinhan-global-note">
       아래 내용은 입력값과 공공데이터 기반 시뮬레이션 결과를 바탕으로 한 <b>상담 후보</b>입니다.
       실제 상품 가입 가능 여부, 대출 한도, 금리, 보험료, 투자·성장지원 가능 여부는 신한금융그룹 각 사의 심사 및 상담 결과에 따라 달라질 수 있습니다.
@@ -2488,6 +4664,124 @@ function chartOptions() {
     },
   };
 }
+
+// ── 지도 탐색 → 진단 연결 ───────────────────────────────────────────────────
+const MAP_EXPLORER_SERVICE_NAME = {
+  all: '커피-음료',
+  food: '한식음식점',
+  cafe: '커피-음료',
+  beauty: '미용실',
+  academy: '외국어학원',
+  sports: '스포츠클럽',
+  retail: '편의점',
+  other: '일반의류',
+};
+
+async function goDiagnosisFromMapExplorer(kind, ctx) {
+  const rawLat = ctx && ctx.lat;
+  const rawLon = ctx && ctx.lon;
+  const lat = Number(rawLat);
+  const lon = Number(rawLon);
+  const radius = Number(ctx.radius_m ?? ctx.radius ?? 500);
+  const industryKey = ctx.industry_key || 'all';
+  const validLatLon =
+    rawLat !== null &&
+    rawLat !== undefined &&
+    rawLon !== null &&
+    rawLon !== undefined &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat > 33 &&
+    lat < 39 &&
+    lon > 124 &&
+    lon < 132;
+  if (!validLatLon) {
+    alert('먼저 지도에서 위치를 선택하거나 검색으로 중심을 지정해 주세요.');
+    return;
+  }
+  State.customCenter = [lat, lon];
+  State.mapExplorerContext = {
+    lat,
+    lon,
+    radius_m: radius,
+    industryKey,
+    area_code: ctx.area_code || '',
+    area_name: ctx.area_name || '',
+  };
+  State.activeRadius = radius <= 300 ? 300 : radius <= 500 ? 500 : 1000;
+
+  let cand = null;
+  try {
+    const na = await fetchJson(
+      `/api/map-explorer/nearest-area?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`,
+    );
+    cand = na.candidates && na.candidates[0];
+  } catch (e) {
+    console.warn(e);
+  }
+
+  State.service_name = MAP_EXPLORER_SERVICE_NAME[industryKey] || MAP_EXPLORER_SERVICE_NAME.all;
+
+  State.mapExplorerSummary = {
+    lat,
+    lon,
+    radius_m: radius,
+    industryKey,
+    area_code: ctx.area_code || '',
+    area_name: ctx.area_name || '',
+    service_name: State.service_name,
+    density_level: ctx.density_level || '',
+    same_or_similar_stores:
+      ctx.same_or_similar_stores === undefined || ctx.same_or_similar_stores === ''
+        ? null
+        : ctx.same_or_similar_stores,
+  };
+
+  if (kind === 'wizard') {
+    State.user_type = '';
+    selectUserTypeCard(null);
+    goStep('user-type');
+    return;
+  }
+
+  if (kind === 'operate') {
+    window.__MAP_EXPLORER_LAST_CONTEXT__ = { lat, lon, radius_m: radius, industryKey };
+    if (typeof window.openOperatingStoreSelector === 'function') {
+      window.openOperatingStoreSelector();
+    } else {
+      goStep('operating-connect');
+    }
+    return;
+  }
+
+  if (kind === 'startup') {
+    State.user_type = '창업 예정자';
+    selectUserTypeCard('창업 예정자');
+    if (ctx.area_code && ctx.area_name) {
+      State.district = ctx.district || '';
+      State.dong = ctx.dong || '';
+      State.area_code = ctx.area_code;
+      State.area_name = ctx.area_name;
+    } else if (cand && cand.area_code) {
+      State.district = cand.district || '';
+      State.dong = cand.dong || '';
+      State.area_code = cand.area_code;
+      State.area_name = cand.area_name || '';
+    } else {
+      State.district = '';
+      State.dong = '';
+      State.area_code = '';
+      State.area_name = '';
+      alert('가까운 상권을 자동으로 찾지 못했습니다. 다음 화면에서 상권을 직접 선택해 주세요.');
+    }
+    goStep('area');
+    await loadDistricts(true);
+    await hydrateAreaSelectionFromState();
+    validateAreaStep();
+  }
+}
+
+window.goDiagnosisFromMapExplorer = goDiagnosisFromMapExplorer;
 
 // ── 유틸 ────────────────────────────────────────────────────────────────────
 async function fetchJson(url, opts = {}) {

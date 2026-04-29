@@ -6,7 +6,7 @@
   <title>신한 자영업 경영지원 컨설팅 | 단계형 분석</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260430n">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260429meux">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -23,6 +23,32 @@
   <nav class="header-nav">
     <a href="#" class="nav-link" data-jump="home">홈</a>
     <a href="#" class="nav-link" data-jump="result">최근 분석 결과</a>
+    <div class="header-account">
+      <button class="btn btn-ghost btn-sm" type="button" id="btn-account-panel">로그인 · 내 계정</button>
+      <div class="account-popover" id="account-popover" hidden>
+        <div class="account-box" id="account-box">
+          <div class="account-head">
+            <h3>Google 로그인</h3>
+            <p>로그인 시 저장된 분석 조건·조회 이력을 불러와 이어서 진행할 수 있습니다.</p>
+          </div>
+          <div class="account-login-row account-login-google-only">
+            <div id="google-login-button"></div>
+            <button class="btn btn-back btn-sm" id="btn-logout-account">로그아웃</button>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:6px">서버에 <code>GOOGLE_CLIENT_ID</code>가 설정되어 있어야 합니다.</div>
+          <div class="account-quick-actions">
+            <button class="btn btn-primary btn-sm" id="btn-quick-operating">운영 매장 진단 바로가기</button>
+            <button class="btn btn-secondary btn-sm" id="btn-quick-financial">금융 점검 바로가기</button>
+          </div>
+          <div id="account-status" class="muted">로그인되지 않았습니다.</div>
+          <div id="saved-profiles" class="saved-profiles-list"></div>
+          <div class="account-history-head">
+            <h4>내 가맹점 관리 · 조회 이력</h4>
+          </div>
+          <div id="account-history" class="saved-profiles-list"></div>
+        </div>
+      </div>
+    </div>
     <span class="nav-tag">v2 · 데모</span>
   </nav>
 </header>
@@ -50,10 +76,13 @@
           사업에 필요한 자금, 보험, 카드 매출관리, 성장지원 방향까지 한 번에 점검해드립니다.
         </p>
         <div class="hero-actions">
-          <button class="btn btn-primary"   data-action="start-create">창업 컨설팅 시작하기</button>
-          <button class="btn btn-secondary" data-action="start-operate">운영 매장 진단하기</button>
+          <button class="btn btn-primary"   data-action="start-create">창업 컨설팅 시작</button>
+          <button class="btn btn-secondary" data-action="start-operate">운영 중 매장 진단</button>
+          <button class="btn btn-secondary" data-action="start-financial">금융/보험 점검</button>
+          <button class="btn btn-map-explorer" data-action="open-map-explorer">지도 기반으로 상권 보기</button>
           <button class="btn btn-ghost"     data-action="open-samples">샘플 리포트 보기</button>
         </div>
+        <p class="hero-map-help muted">지도를 보면서 주변 점포, 경쟁 강도, 반경별 상권 환경을 먼저 확인할 수 있습니다.</p>
       </div>
       <div class="hero-stats">
         <div class="stat-card">
@@ -72,6 +101,20 @@
           <div class="stat-num">7곳</div>
           <div class="stat-label">공공데이터 출처</div>
         </div>
+      </div>
+    </div>
+
+    <div class="home-map-preview card-elevated">
+      <div class="home-map-preview-visual" aria-hidden="true">
+        <div class="home-map-preview-mapfake"></div>
+        <span class="home-map-badge">반경 500m 경쟁점</span>
+        <span class="home-map-badge">업종 Top 3</span>
+        <span class="home-map-badge accent">상권 진단 연결</span>
+      </div>
+      <div class="home-map-preview-body">
+        <h3 class="home-map-preview-title">지도에서 먼저 상권을 확인하세요</h3>
+        <p class="home-map-preview-desc">상권을 선택하기 전, 관심 위치 주변의 점포 밀도와 경쟁 강도를 지도에서 먼저 확인할 수 있습니다.</p>
+        <button type="button" class="btn btn-primary btn-sm" data-action="open-map-explorer">지도 기반으로 보기</button>
       </div>
     </div>
 
@@ -106,6 +149,123 @@
 
     <div class="disclaimer">
       본 서비스는 공공데이터와 합성 데이터에 기반한 PoC입니다. 대출 가능 여부와 금리, 보험 보장 범위는 실제 심사 및 상담을 통해 확인해야 합니다.
+    </div>
+  </section>
+
+  <!-- 지도 기반 상권 탐색 (탐색 전용 / 결과 화면 경쟁점 지도 탭과 별도) -->
+  <section class="panel map-explorer-page" id="panel-map-explorer" style="display:none">
+    <header class="me-toolbar">
+      <div class="me-toolbar-head">
+        <div class="map-explorer-kicker">신한 Biz 인텔리전스 · 지도 탐색</div>
+        <h2 class="map-explorer-title">지도에서 먼저 상권을 확인하세요</h2>
+        <p class="map-explorer-sub">관심 위치를 클릭하면 주변 점포, 경쟁 강도, 유동인구·매출 힌트(로컬 데이터가 있는 경우), 예상 매출 후보 해석을 간단히 확인할 수 있습니다.</p>
+        <p class="map-explorer-hint muted">지도 클릭만으로 분석 결과 화면으로 이동하지 않습니다. 상세 컨설팅 버튼을 눌렀을 때만 다음 단계로 진행합니다.</p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-map-explorer-close">메인으로</button>
+
+      <div class="me-toolbar-controls">
+        <div class="me-control-group">
+          <label class="me-label" for="me-inp-search">장소 검색</label>
+          <div class="mec-search-row">
+            <input type="text" id="me-inp-search" class="mec-input" placeholder="장소명·역명·학교명·주소" autocomplete="off">
+            <button type="button" class="btn btn-primary btn-sm" id="me-btn-search">검색</button>
+          </div>
+          <div id="me-search-results" class="me-search-results"></div>
+          <p id="me-search-hint" class="muted me-small"></p>
+        </div>
+        <div class="me-control-group">
+          <label class="me-label" for="me-sel-industry">업종 필터</label>
+          <select id="me-sel-industry" class="mec-select">
+            <option value="all">전체 업종</option>
+            <option value="food">음식</option>
+            <option value="cafe">카페</option>
+            <option value="beauty">미용</option>
+            <option value="academy">학원</option>
+            <option value="sports">스포츠/오락</option>
+            <option value="retail">소매</option>
+            <option value="other">기타</option>
+          </select>
+        </div>
+        <div class="me-control-group">
+          <span class="me-label">기준 반경</span>
+          <div class="me-radius-btns">
+            <button type="button" class="btn btn-secondary btn-sm me-rad" data-r="300">300m</button>
+            <button type="button" class="btn btn-secondary btn-sm me-rad active" data-r="500">500m</button>
+            <button type="button" class="btn btn-secondary btn-sm me-rad" data-r="1000">1km</button>
+          </div>
+          <p id="me-radius-strip" class="muted me-small me-radius-strip" aria-live="polite"></p>
+        </div>
+      </div>
+    </header>
+
+    <div class="map-explorer-split me-main-split">
+      <div class="map-explorer-map-wrap me-map-col">
+        <div id="map-explorer-leaflet" class="map-explorer-leaflet" role="application" aria-label="상권 탐색 지도"></div>
+        <div id="me-map-provider-note" class="map-explorer-map-footer muted"></div>
+      </div>
+
+      <aside class="map-explorer-sidebar me-insight-col">
+        <div class="map-explorer-card me-stats" id="me-stats-card">
+          <h4 class="mec-title">선택 위치 요약</h4>
+          <p id="me-location-label" class="me-location-label muted">위치를 선택하면 좌표·선택 상권이 표시됩니다.</p>
+          <div class="me-stat-grid">
+            <div class="me-stat"><span class="me-stat-label">반경 내 전체 점포</span><b id="me-stat-total">—</b></div>
+            <div class="me-stat"><span class="me-stat-label">동일·유사 업종</span><b id="me-stat-same">—</b></div>
+            <div class="me-stat span-2"><span class="me-stat-label">경쟁 강도</span><b id="me-stat-level">—</b></div>
+          </div>
+          <div class="me-nearest muted" id="me-nearest"></div>
+          <div id="me-top-bar-wrap" class="me-top-bar-wrap"></div>
+          <p class="muted me-small" id="me-top3"></p>
+          <div id="me-hints-mini" class="me-hints-mini muted"></div>
+          <p class="me-interpret" id="me-interpret"></p>
+          <p class="muted me-small" id="me-recommended-action"></p>
+        </div>
+
+        <div class="map-explorer-card">
+          <h4 class="mec-title">주변 상권 후보</h4>
+          <div id="me-area-cards" class="me-area-cards"></div>
+        </div>
+
+        <div class="map-explorer-card me-actions">
+          <button type="button" class="btn btn-primary btn-block" id="me-btn-startup">이 위치로 창업 컨설팅 시작</button>
+          <button type="button" class="btn btn-secondary btn-block" id="me-btn-operate">이 위치로 운영 진단 시작</button>
+          <button type="button" class="btn btn-ghost btn-sm btn-block" id="me-btn-wizard">상세 조건 입력하기</button>
+          <button type="button" class="btn btn-back btn-sm btn-block" id="me-btn-reset">선택 초기화</button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="me-bottom-dash">
+      <div class="me-bottom-head">
+        <h3 class="me-bottom-title">선택 위치 간단 진단</h3>
+        <button type="button" class="btn btn-ghost btn-sm me-help-toggle" id="me-help-toggle" aria-expanded="false">도움말</button>
+      </div>
+      <p id="me-help-panel" class="me-help-panel muted" hidden>표시 수치는 로컬 공공·상가 CSV 기준입니다. 실제 매출·임대료·유동인구는 상세 컨설팅 입력 후 분석에서 함께 검토할 수 있습니다.</p>
+
+      <div class="me-kpi-row">
+        <article class="me-mini-card"><div class="me-mini-k">경쟁 밀도</div><div class="me-mini-v" id="me-mini-density">—</div><div class="muted me-small" id="me-mini-density-sub"></div></article>
+        <article class="me-mini-card"><div class="me-mini-k">반경 내 점포</div><div class="me-mini-v" id="me-mini-total">—</div><div class="muted me-small">전체 업종 기준</div></article>
+        <article class="me-mini-card"><div class="me-mini-k">유동인구 힌트</div><div class="me-mini-v" id="me-mini-fp">—</div><div class="muted me-small" id="me-mini-fp-sub"></div></article>
+        <article class="me-mini-card"><div class="me-mini-k">매출 힌트</div><div class="me-mini-v" id="me-mini-sales">—</div><div class="muted me-small" id="me-mini-sales-sub"></div></article>
+      </div>
+
+      <div class="me-bottom-split">
+        <div class="me-store-panel">
+          <h4 class="mec-title">반경 내 점포 목록</h4>
+          <div id="me-store-list" class="me-store-list"></div>
+        </div>
+        <div class="me-compare-panel">
+          <h4 class="mec-title">상권 후보 비교</h4>
+          <div id="me-comparison-cards" class="me-comparison-cards"></div>
+        </div>
+      </div>
+
+      <div class="me-or-summary muted" id="me-opportunity-risk"></div>
+
+      <div class="me-cta-bottom">
+        <button type="button" class="btn btn-primary" id="me-btn-cta-startup">상세 정보 입력 후 전체 컨설팅 보기 (창업)</button>
+        <button type="button" class="btn btn-secondary" id="me-btn-cta-operate">상세 정보 입력 후 전체 컨설팅 보기 (운영)</button>
+      </div>
     </div>
   </section>
 
@@ -223,21 +383,25 @@
     <div class="panel-head">
       <h2>사업 조건을 입력해주세요</h2>
       <p>입력하지 않은 값은 상권 평균 또는 합성 점포 데이터로 자동 채워집니다.
-        잘 모르시면 우측의 <b>AI 추천값 자동 채우기</b>를 쓰거나, 아래 <b>조건 입력 건너뛰기</b>로 바로 분석할 수 있습니다.</p>
+        잘 모르시면 우측의 <b>시뮬레이션 기본값 자동 채우기</b>를 쓰거나, 아래 <b>조건 입력 건너뛰기</b>로 바로 분석할 수 있습니다.</p>
     </div>
+
+    <div id="finance-map-selection-banner" class="finance-map-selection-banner" hidden role="region" aria-label="지도에서 선택한 위치"></div>
 
     <div class="recommend-bar">
       <div class="recommend-left">
-        <div class="recommend-title">🤖 우리 플랫폼이 추천드릴 수 있어요</div>
+        <div class="recommend-title">공공데이터 기반 시뮬레이션 기본값</div>
         <div class="recommend-desc" id="recommend-desc">
-          선택한 상권·업종의 <b>실제 추정매출</b>과 <b>업종 평균 비율</b>을 결합해 사업 조건의 default를 자동 산출합니다.
-          입력 항목 옆에 <b>추천: ₩...</b> 와 데이터 출처가 표시됩니다.
+          선택한 상권·업종의 <b>추정매출</b>과 <b>업종 평균 비율</b>을 결합해 사업 조건 입력의 참고 기본값을 채웁니다.
+          입력란 옆에 <b>시뮬 기본값</b>과 출처 요약이 표시됩니다. 특정 대출·상품을 제안하지 않습니다.
         </div>
       </div>
       <div class="recommend-right">
-        <button class="btn btn-primary btn-sm" id="btn-recommend">AI 추천값 자동 채우기</button>
+        <button class="btn btn-primary btn-sm" id="btn-recommend">시뮬레이션 기본값 자동 채우기</button>
       </div>
     </div>
+
+    <div id="finance-recommendation-explain" class="finance-recommendation-explain" hidden aria-live="polite"></div>
 
     <div class="mode-tabs">
       <button class="mode-tab active" data-mode="simple">간편 입력</button>
@@ -291,6 +455,7 @@
     <div class="panel-actions panel-actions-split">
       <button class="btn btn-back"      data-go="area">이전</button>
       <div class="panel-actions-right">
+        <button class="btn btn-secondary" type="button" id="btn-save-profile">내 정보 저장</button>
         <button class="btn btn-ghost"    type="button" id="btn-skip-finance">조건 입력 건너뛰기</button>
         <button class="btn btn-primary"   id="btn-analyze">분석 시작</button>
       </div>
@@ -542,6 +707,7 @@
       <button class="tab"        data-tab="map">경쟁점 지도</button>
       <button class="tab"        data-tab="finance">자금·손익분기점</button>
       <button class="tab"        data-tab="services">신한 서비스 연결</button>
+      <button class="tab"        data-tab="action-plan">30일 실행 플랜</button>
       <button class="tab"        data-tab="report">AI 리포트</button>
     </div>
 
@@ -550,6 +716,7 @@
     <div class="tab-panel"        id="tab-map"     style="display:none"></div>
     <div class="tab-panel"        id="tab-finance" style="display:none"></div>
     <div class="tab-panel"        id="tab-services" style="display:none"></div>
+    <div class="tab-panel"        id="tab-action-plan" style="display:none"></div>
     <div class="tab-panel"        id="tab-report"  style="display:none"></div>
 
     <div class="panel-actions">
@@ -590,7 +757,10 @@
 
 {# 경쟁점 지도는 Leaflet/OSM 전용 — 브라우저 카카오 Maps SDK 미로드 #}
 <script defer src="/static/js/shinhan_cta_registry.js?v=20260430h"></script>
-<script defer src="/static/js/app.js?v=20260428funds"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>window.__GOOGLE_CLIENT_ID__="{{ google_client_id | default('', true) }}";</script>
+<script defer src="/static/js/app.js?v=20260430startupsim"></script>
+<script defer src="/static/js/map_explorer.js?v=20260429meux"></script>
 <script defer src="/static/js/operating_business.js?v=20260430planreport"></script>
 <script defer src="/static/js/financial_check.js?v=20260430f"></script>
 </body>

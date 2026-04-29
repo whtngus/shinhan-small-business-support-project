@@ -286,7 +286,7 @@ def map_config():
     (구버전 호환: KAKAO_MAP_APP_KEY 도 동일 용도로 fallback)
     REST API 키는 서버에서만 사용하며 노출되지 않습니다.
     """
-    provider = os.getenv("MAP_PROVIDER", "kakao").strip().lower() or "kakao"
+    provider = os.getenv("MAP_PROVIDER", "auto").strip().lower() or "auto"
     js_key = (
         os.getenv("KAKAO_JAVA_SCRIPT_KEY", "").strip()
         or os.getenv("KAKAO_MAP_APP_KEY", "").strip()

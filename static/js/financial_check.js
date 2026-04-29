@@ -519,5 +519,6 @@
     document.getElementById('fc-btn-save-report')?.addEventListener('click', saveReport);
   }
 
+  window.openFinancialStoreList = openStoreList;
   document.addEventListener('DOMContentLoaded', init);
 })();
