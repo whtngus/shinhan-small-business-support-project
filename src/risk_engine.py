@@ -395,16 +395,25 @@ def detect_early_warning(
     avg_sales_s: pd.Series,
     store_s: pd.Series,
     floating_s: pd.Series,
+    user_type: str = "",
+    allow_sales_vs_area_warning: bool = True,
+    allow_quarter_sales_warning: bool = True,
 ) -> "list[str]":
+    """상권·업종 공공데이터(sales_s) 기반 경고. 창업 예정자에게는 '실적'으로 오해되지 않게
+    분기 매출·상권 대비 문구는 끄는 것이 일반적(allow_quarter_sales_warning / allow_sales_vs_area_warning)."""
     warnings = []
-    if len(sales_s) >= 2:
+    # sales_s = 상권·업종 집계 시계열. 창업 예정자에게는 '내 매출 감소'로 읽힐 수 있어 기본적으로 비활성화 권장.
+    if allow_quarter_sales_warning and len(sales_s) >= 2:
         chg = _pct_change(sales_s)
         if chg < -10:
             warnings.append(f"최근 1분기 매출 {chg:.1f}% 감소")
-    if len(sales_s) >= 2 and not avg_sales_s.empty:
+    if allow_sales_vs_area_warning and len(sales_s) >= 2 and not avg_sales_s.empty:
         ratio = float(sales_s.iloc[-1]) / float(avg_sales_s.iloc[-1]) * 100 if avg_sales_s.iloc[-1] != 0 else 100
         if ratio < 70:
-            warnings.append(f"상권 평균 대비 매출 {100-ratio:.0f}% 낮음")
+            if str(user_type).strip() == "창업 예정자":
+                warnings.append(f"선택 업종의 상권 내 매출 비중이 낮은 편 (평균 대비 {100-ratio:.0f}% 낮음)")
+            else:
+                warnings.append(f"상권 평균 대비 매출 {100-ratio:.0f}% 낮음")
     if len(store_s) >= 4:
         chg = _pct_change(store_s, 4)
         if chg > 20:

@@ -317,6 +317,34 @@ a { color: inherit; text-decoration: none; }
 .form-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px;
 }
+.panel#panel-area .form-grid {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid var(--gray-200);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+}
+.panel#panel-area .form-item {
+  background: #fff;
+  border: 1px solid var(--gray-100);
+  border-radius: 12px;
+  padding: 10px;
+}
+.panel#panel-area .form-item label {
+  color: #475569;
+}
+.panel#panel-area .form-item input,
+.panel#panel-area .form-item select {
+  border-radius: 10px;
+  border-color: #dbe3ee;
+  background: #fcfdff;
+}
+.panel#panel-area .form-item input:focus,
+.panel#panel-area .form-item select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
 .finance-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .form-item label {
   display: block; font-size: 12px; font-weight: 700; color: var(--gray-700);
@@ -1889,6 +1917,97 @@ a { color: inherit; text-decoration: none; }
   background: #f1f5f9; font-size: 11px;
 }
 .sp-disc { font-size: 11px; color: var(--gray-400); margin: 12px 0 0; line-height: 1.5; }
+
+/* 신한 추천 보장·카드(상담 후보) 강조 블록 */
+.sp-rec-wrap {
+  margin: 12px 0 14px;
+  padding: 12px 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--gray-200);
+  background: linear-gradient(165deg, #f8fafc 0%, #fff 55%);
+}
+.sp-rec-wrap.sp-rec-life { border-left: 4px solid #f97316; }
+.sp-rec-wrap.sp-rec-cardsec { border-left: 4px solid #0ea5e9; }
+.sp-rec-head {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--gray-900);
+  margin-bottom: 8px;
+  letter-spacing: -0.02em;
+}
+.sp-rec-lead, .sp-rec-tip {
+  font-size: 11px;
+  color: var(--gray-600);
+  line-height: 1.55;
+  margin: 0 0 10px;
+}
+.sp-rec-tip {
+  padding: 8px 10px;
+  background: #ecfeff;
+  border-radius: 8px;
+  color: var(--gray-800);
+}
+.sp-rec-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .sp-rec-grid { grid-template-columns: 1fr 1fr; }
+  .sp-rec-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+.sp-rec-card {
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.sp-rec-name {
+  font-weight: 800;
+  color: var(--gray-900);
+  margin-bottom: 6px;
+  line-height: 1.35;
+}
+.sp-rec-sum { color: var(--gray-700); line-height: 1.5; margin-bottom: 8px; }
+.sp-rec-tier {
+  font-size: 11px;
+  color: var(--primary-dark);
+  font-weight: 600;
+  margin-bottom: 8px;
+  line-height: 1.45;
+}
+.sp-rec-ben {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--gray-800);
+  line-height: 1.5;
+}
+.sp-rec-ben li { margin-bottom: 4px; }
+.sp-rec-focus {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--gray-200);
+  font-size: 11px;
+  color: var(--gray-700);
+  line-height: 1.45;
+}
+.sp-rec-focus-k {
+  display: inline-block;
+  font-weight: 800;
+  color: #c2410c;
+  margin-right: 6px;
+}
+.sp-rec-vs {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--gray-600);
+  line-height: 1.5;
+  padding: 6px 8px;
+  background: var(--gray-50);
+  border-radius: 6px;
+}
+.sp-rec-link { margin-top: 12px; }
 
 /* ── 신한 서비스 카드 (레거시 그리드, 미사용 가능) ─── */
 .services-grid {

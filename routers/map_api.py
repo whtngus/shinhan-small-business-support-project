@@ -41,16 +41,33 @@ SERVICE_SYNONYMS = {
     "치과의원":     ["치과"],
     "일반의류":     ["의류", "옷"],
     "화장품":       ["화장품"],
+    "의약품":       ["약국", "의약품", "의약품판매", "한약", "의약"],
+    "약국":         ["약국", "의약품", "의약품판매", "한약"],
+    "의약품판매":   ["약국", "의약품", "의약품판매", "한약"],
 }
 
 
 def _service_keywords(service_name: str):
     if not service_name:
         return []
-    if service_name in SERVICE_SYNONYMS:
-        return SERVICE_SYNONYMS[service_name]
-    base = service_name.replace("음식점", "").replace("전문점", "").replace("-", " ").strip()
-    return [w for w in base.split() if w] or [service_name[:2]]
+    norm = service_name.strip().replace(" ", "")
+    if norm in SERVICE_SYNONYMS:
+        return SERVICE_SYNONYMS[norm]
+    # 완전일치가 아니어도 유사 키 이름이 포함되면 동의어를 사용
+    for k, kws in SERVICE_SYNONYMS.items():
+        if k in norm or norm in k:
+            return kws
+    base = (
+        norm.replace("음식점", "")
+        .replace("전문점", "")
+        .replace("업", "")
+        .replace("-", " ")
+        .strip()
+    )
+    kws = [w for w in base.split() if len(w) >= 2]
+    if not kws and service_name:
+        kws = [service_name.strip()]
+    return kws
 
 
 def _service_mask(df: pd.DataFrame, service_name: str) -> pd.Series:
@@ -59,11 +76,17 @@ def _service_mask(df: pd.DataFrame, service_name: str) -> pd.Series:
     keywords = _service_keywords(service_name)
     if not keywords:
         return pd.Series(False, index=df.index)
-    pattern = "|".join(keywords)
+    # 키워드는 escape 처리 후 OR 정규식으로 매칭 (오탐 감소)
+    import re
+    pattern = "|".join(re.escape(k) for k in keywords if k)
     sub_col = df.get("상권업종소분류명", pd.Series(dtype=str))
     mid_col = df.get("상권업종중분류명", pd.Series(dtype=str))
-    return sub_col.fillna("").str.contains(pattern, case=False, na=False) | \
-           mid_col.fillna("").str.contains(pattern, case=False, na=False)
+    large_col = df.get("상권업종대분류명", pd.Series(dtype=str))
+    return (
+        sub_col.fillna("").str.contains(pattern, case=False, na=False, regex=True)
+        | mid_col.fillna("").str.contains(pattern, case=False, na=False, regex=True)
+        | large_col.fillna("").str.contains(pattern, case=False, na=False, regex=True)
+    )
 
 
 def _get(key, loader):

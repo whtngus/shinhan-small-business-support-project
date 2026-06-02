@@ -41,6 +41,8 @@ const State = {
   mapExplorerContext: null,
   /** 조건 입력 화면 상단 배너용 요약 */
   mapExplorerSummary: null,
+  /** area 패널 기본값 자동 채움 예약 */
+  mapExplorerAreaPrefillPending: false,
 };
 
 const ACCOUNT_KEY = 'shinhan.account.v1';
@@ -558,7 +560,15 @@ function goStep(step) {
     el.classList.toggle('done',   n <  stepIdx);
   });
 
-  if (step === 'area') loadDistricts();
+  if (step === 'area') {
+    if (State.mapExplorerAreaPrefillPending) {
+      requestAnimationFrame(() => {
+        applyMapExplorerAreaPrefill().catch((e) => console.warn('[mapExplorer prefill]', e));
+      });
+    } else {
+      loadDistricts();
+    }
+  }
 
   if (step === 'map-explorer') {
     requestAnimationFrame(() => {
@@ -569,6 +579,115 @@ function goStep(step) {
   if (step === 'finance') updateMapExplorerFinanceBanner();
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function inferServiceFromMapExplorerContext(ctx) {
+  const raw = String(ctx?.place_category || ctx?.place_title || '').toLowerCase();
+  if (!raw) return '';
+  if (raw.includes('약국') || raw.includes('의약')) return '의약품';
+  if (raw.includes('카페') || raw.includes('커피')) return '커피-음료';
+  if (raw.includes('편의점')) return '편의점';
+  if (raw.includes('한식')) return '한식음식점';
+  if (raw.includes('미용') || raw.includes('헤어') || raw.includes('네일')) return '미용실';
+  return '';
+}
+
+function applyMapExplorerDefaultsToState(chosen, serviceName) {
+  if (chosen && chosen.area_code) {
+    State.district = chosen.district || State.district || '';
+    State.dong = chosen.dong || State.dong || '';
+    State.area_code = chosen.area_code;
+    State.area_name = chosen.area_name || State.area_name || '';
+  }
+  if (serviceName) {
+    State.service_name = serviceName;
+  }
+}
+
+async function applyMapExplorerAreaPrefill() {
+  if (!State.mapExplorerAreaPrefillPending) return;
+  const ctx = State.mapExplorerContext || {};
+  const wantedDistrict = String(ctx.district || State.district || '').trim();
+  const wantedDong = String(ctx.dong || State.dong || '').trim();
+  const wantedAreaCode = String(ctx.area_code || State.area_code || '').trim();
+  const wantedAreaName = String(ctx.area_name || State.area_name || '').trim();
+  const wantedService = String(ctx.service_name || State.service_name || '').trim();
+
+  if (!wantedAreaCode) {
+    State.mapExplorerAreaPrefillPending = false;
+    return;
+  }
+  State.mapExplorerAreaPrefillPending = false;
+  await loadDistricts(true);
+
+  const districtSel = document.getElementById('sel-district');
+  const dongSel = document.getElementById('sel-dong');
+  const areaSel = document.getElementById('sel-area');
+  const serviceSel = document.getElementById('sel-service');
+
+  // 1) 자치구
+  if (districtSel && wantedDistrict) {
+    const distOpt = [...districtSel.options].find(
+      (o) => String(o.value || '').trim() === wantedDistrict,
+    );
+    if (!distOpt) {
+      const o = document.createElement('option');
+      o.value = wantedDistrict;
+      o.textContent = wantedDistrict;
+      districtSel.appendChild(o);
+    }
+    districtSel.value = wantedDistrict;
+    await onDistrictChange();
+  }
+
+  // 2) 행정동
+  if (dongSel && wantedDong) {
+    const dongOpt = [...dongSel.options].find(
+      (o) => String(o.value || '').trim() === wantedDong,
+    );
+    if (!dongOpt) {
+      const o = document.createElement('option');
+      o.value = wantedDong;
+      o.textContent = `${wantedDong} (지도 선택)`;
+      dongSel.appendChild(o);
+    }
+    dongSel.value = wantedDong;
+    State.dong = wantedDong;
+    await loadAreaList();
+  }
+
+  // 3) 상권
+  if (areaSel && wantedAreaCode) {
+    const areaOpt = [...areaSel.options].find(
+      (o) => String(o.value || '').trim() === wantedAreaCode,
+    );
+    if (!areaOpt) {
+      const o = document.createElement('option');
+      o.value = wantedAreaCode;
+      o.textContent = `${wantedAreaName || wantedAreaCode} (지도 선택)`;
+      o.dataset.name = wantedAreaName || '';
+      areaSel.appendChild(o);
+    }
+    areaSel.value = wantedAreaCode;
+    await onAreaChange();
+  }
+
+  // 4) 업종
+  if (serviceSel && wantedService) {
+    const svcOpt = [...serviceSel.options].find(
+      (o) => String(o.value || '').trim() === wantedService,
+    );
+    if (!svcOpt) {
+      const o = document.createElement('option');
+      o.value = wantedService;
+      o.textContent = `${wantedService} (지도 선택)`;
+      serviceSel.appendChild(o);
+    }
+    serviceSel.value = wantedService;
+    onServiceChange();
+  }
+
+  validateAreaStep();
 }
 
 function updateMapExplorerFinanceBanner() {
@@ -827,12 +946,25 @@ async function runExternalSearch() {
         <button class="btn btn-secondary btn-xs">이 상권 선택</button>
       </div>`).join('');
     matchedEl.querySelectorAll('.ext-card.matched').forEach(card => {
-      card.addEventListener('click', () => applyMatchedArea(card.dataset));
+      card.addEventListener('click', () => applyMatchedArea(card.dataset, q));
     });
   }
 }
 
-async function applyMatchedArea(d) {
+function guessServiceNameFromKeyword(q) {
+  const s = String(q || '').toLowerCase();
+  if (!s) return '';
+  if (s.includes('약국') || s.includes('의약')) return '의약품';
+  if (s.includes('카페') || s.includes('커피') || s.includes('스타벅스')) return '커피-음료';
+  if (s.includes('치킨')) return '치킨전문점';
+  if (s.includes('분식')) return '분식전문점';
+  if (s.includes('편의점')) return '편의점';
+  if (s.includes('미용') || s.includes('헤어')) return '미용실';
+  if (s.includes('사진')) return '사진관';
+  return '';
+}
+
+async function applyMatchedArea(d, sourceKeyword = '') {
   if (!d.area) return;
   // 자치구 → 행정동 → 상권 → (사용자가 업종 선택) 순서로 자동 채움
   const distSel = document.getElementById('sel-district');
@@ -859,6 +991,20 @@ async function applyMatchedArea(d) {
   }
   areaSel.value = d.area;
   await onAreaChange();
+  const svcGuess = guessServiceNameFromKeyword(sourceKeyword);
+  if (svcGuess) {
+    const serviceSel = document.getElementById('sel-service');
+    if (serviceSel) {
+      if (![...serviceSel.options].some(o => o.value === svcGuess)) {
+        const opt = document.createElement('option');
+        opt.value = svcGuess;
+        opt.textContent = `${svcGuess} (검색 키워드 추정)`;
+        serviceSel.appendChild(opt);
+      }
+      serviceSel.value = svcGuess;
+      onServiceChange();
+    }
+  }
   document.querySelector('#panel-area .external-search-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -2093,6 +2239,48 @@ function buildDecisionSummary(data) {
   };
 }
 
+/** 기회·주의 요인의 내부 source 키 → 화면용 근거 라벨 (개발자 식별자는 노출하지 않음) */
+const FACTOR_SOURCE_LABELS = {
+  detect_early_warning: '조기경보 · 공공데이터',
+  'scores.final': '종합 점수',
+  'scores.survival': '업종 생존성',
+  'scores.population': '유동인구',
+  'scores.growth': '매출 성장성',
+  'scores.competition': '경쟁 강도',
+  'scores.rent': '임대·고정비',
+  'scores.attraction': '상권 매력도',
+  'scores.ecosystem': '점포 생태계',
+  'finance.cash_months': '재무·현금 추정',
+  'finance 추정': '재무 추정',
+  'shinhan_panels.card': '카드·시간대 분석',
+  API: '분석 결과',
+  분석: '분석 결과',
+};
+
+function humanizeFactorSource(source) {
+  const s = String(source || '').trim();
+  if (!s) return '';
+  if (FACTOR_SOURCE_LABELS[s]) return FACTOR_SOURCE_LABELS[s];
+  if (/^scores\./.test(s)) {
+    const tail = s.replace(/^scores\./, '');
+    const map = {
+      final: '종합 점수',
+      survival: '업종 생존성',
+      population: '유동인구',
+      growth: '매출 성장성',
+      competition: '경쟁 강도',
+      rent: '임대·고정비',
+      attraction: '상권 매력도',
+      ecosystem: '점포 생태계',
+      debt: '부채 체력',
+    };
+    return map[tail] ? `${map[tail]} 지표` : '';
+  }
+  if (/^finance\./.test(s)) return '재무 추정';
+  if (/^shinhan_/.test(s)) return '신한 연계 분석';
+  return '';
+}
+
 /**
  * 기회·주의 요인 Top 3용 구조화 데이터.
  * API 필드 opportunity_factors / risk_factors 가 있으면 우선 사용하고, 없으면 점수·경고·재무 등으로 보완한다.
@@ -2363,6 +2551,10 @@ function renderOpportunityRiskFactorsHtml(data) {
     const lvlClass = `orf-level-${escapeHtml(f.level || 'medium')}`;
     const iconClass = kind === 'opp' ? 'orf-icon-opp' : 'orf-icon-risk';
     const icon = kind === 'opp' ? '✓' : '⚠';
+    const srcLabel = humanizeFactorSource(f.source);
+    const srcHtml = srcLabel
+      ? `<span class="orf-item-src">근거: ${escapeHtml(srcLabel)}</span>`
+      : '';
     return `
       <li class="orf-item ${iconClass} ${lvlClass}">
         <div class="orf-item-head">
@@ -2370,7 +2562,7 @@ function renderOpportunityRiskFactorsHtml(data) {
           <span class="orf-item-title">${escapeHtml(f.title)}</span>
         </div>
         <p class="orf-item-desc">${escapeHtml(f.description)}</p>
-        <span class="orf-item-src">${escapeHtml(f.source)}</span>
+        ${srcHtml}
       </li>`;
   }
 
@@ -3939,12 +4131,11 @@ function renderCompetitorList() {
       <div class="info-box comp-expand-intro">
         <div class="info-title">근처 다른 업종 참고</div>
         <div class="info-body">
-          동일 업종은 주변에 거의 없습니다. 반경 2km 안의 다른 업종 점포 거리를 참고하세요.
+          선택한 업종과 일치하는 점포가 없어 목록을 비워 두었습니다.
+          <br>필요하면 <b>동일업종만</b> 체크를 해제해 주변 업종 분포를 참고하세요.
         </div>
       </div>`;
-    html += refOther
-      .map(s => rowHtml(s, { flyOnly: true, extraClass: 'comp-row-ref', badge: '참고' }))
-      .join('');
+    html += '';
   } else if (!sameOnly && arr.length === 0 && (State.competitors || []).length === 0 && refOther.length > 0) {
     html = `
       <div class="info-box comp-expand-intro"><div class="info-body">이 위치 근처 상가 데이터가 적습니다. 아래는 참고용 인근 점포입니다.</div></div>`;
@@ -3952,12 +4143,7 @@ function renderCompetitorList() {
   } else {
     html = `<div class="muted">반경 ${r}m 이내 ${sameOnly ? '동일 업종 ' : ''}경쟁점이 없습니다.</div>`;
     if (sameOnly && extSame.length === 0 && refOther.length > 0) {
-      html += `
-        <div class="muted comp-fallback-note" style="margin-top:10px">동일 업종만 보기 해제 시 기타 업종이 표시되거나, 아래 참고 목록을 확인하세요.</div>
-        <div class="comp-ref-block-title">반경 2km · 다른 업종 참고</div>`;
-      html += refOther
-        .map(s => rowHtml(s, { flyOnly: true, extraClass: 'comp-row-ref', badge: '참고' }))
-        .join('');
+      html += `<div class="muted comp-fallback-note" style="margin-top:10px">동일 업종만 보기 해제 시 주변 업종 분포를 참고할 수 있습니다.</div>`;
     }
   }
 
@@ -4242,6 +4428,43 @@ function renderInvestProductRow(pr, idx) {
     </div>`;
 }
 
+/** 신한라이프: 추천 보장 점검(상담 후보) 블록 */
+function renderShinhanRecommendedInsurance(rec) {
+  if (!rec || !Array.isArray(rec.items) || rec.items.length === 0) return '';
+  const title = escapeHtml(rec.section_title || '');
+  const lead = rec.lead ? `<p class="sp-rec-lead">${escapeHtml(rec.lead)}</p>` : '';
+  const cards = rec.items.map((it) => `
+    <div class="sp-rec-card">
+      <div class="sp-rec-name">${escapeHtml(it.name || '')}</div>
+      ${it.summary ? `<div class="sp-rec-sum">${escapeHtml(it.summary)}</div>` : ''}
+      <ul class="sp-rec-ben">${(it.benefits || []).map((b) => `<li>${escapeHtml(b)}</li>`).join('')}</ul>
+      ${it.consult_focus ? `<div class="sp-rec-focus"><span class="sp-rec-focus-k">상담 시 확인</span> ${escapeHtml(it.consult_focus)}</div>` : ''}
+    </div>`).join('');
+  const link = rec.official_url
+    ? `<div class="sp-rec-link"><a href="${escapeHtml(rec.official_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm">${escapeHtml(rec.official_label || '공식 사이트')}</a></div>`
+    : '';
+  return `<div class="sp-rec-wrap sp-rec-life"><div class="sp-rec-head">${title}</div>${lead}<div class="sp-rec-grid">${cards}</div>${link}</div>`;
+}
+
+/** 신한카드: 혜택 비교·우대 카드(상담 후보) 블록 */
+function renderShinhanRecommendedCards(rec) {
+  if (!rec || !Array.isArray(rec.items) || rec.items.length === 0) return '';
+  const title = escapeHtml(rec.section_title || '');
+  const lead = rec.lead ? `<p class="sp-rec-lead">${escapeHtml(rec.lead)}</p>` : '';
+  const tip = rec.extra_tip ? `<p class="sp-rec-tip">${escapeHtml(rec.extra_tip)}</p>` : '';
+  const cards = rec.items.map((it) => `
+    <div class="sp-rec-card">
+      <div class="sp-rec-name">${escapeHtml(it.name || '')}</div>
+      ${it.tier_note ? `<div class="sp-rec-tier">${escapeHtml(it.tier_note)}</div>` : ''}
+      <ul class="sp-rec-ben">${(it.benefits || []).map((b) => `<li>${escapeHtml(b)}</li>`).join('')}</ul>
+      ${it.vs_general_note ? `<div class="sp-rec-vs">${escapeHtml(it.vs_general_note)}</div>` : ''}
+    </div>`).join('');
+  const link = rec.official_url
+    ? `<div class="sp-rec-link"><a href="${escapeHtml(rec.official_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm">${escapeHtml(rec.official_label || '공식 사이트')}</a></div>`
+    : '';
+  return `<div class="sp-rec-wrap sp-rec-cardsec"><div class="sp-rec-head">${title}</div>${lead}${tip}<div class="sp-rec-grid">${cards}</div>${link}</div>`;
+}
+
 function renderShinhanPanelCard(key, panel) {
   if (!panel) return '';
   const color = SHINHAN_PANEL_STYLE[key] || '#64748b';
@@ -4253,6 +4476,12 @@ function renderShinhanPanelCard(key, panel) {
   const summary = escapeHtml(panel.summary || '');
   const disclaimer = escapeHtml(panel.disclaimer || '');
   const products = panel.products || [];
+
+  const recBlock = key === 'life' && panel.recommended_insurance
+    ? renderShinhanRecommendedInsurance(panel.recommended_insurance)
+    : key === 'card' && panel.recommended_cards
+      ? renderShinhanRecommendedCards(panel.recommended_cards)
+      : '';
 
   let body = '';
   if (key === 'bank') {
@@ -4306,6 +4535,7 @@ function renderShinhanPanelCard(key, panel) {
         <div class="sp-score-pill">${level} · ${score}점</div>
       </div>
       <p class="sp-summary">${summary}</p>
+      ${recBlock}
       ${diagHtml}
       <div class="sp-products">${body}</div>
       <p class="sp-disc">${disclaimer}</p>
@@ -4721,21 +4951,45 @@ async function goDiagnosisFromMapExplorer(kind, ctx) {
   }
 
   State.service_name = MAP_EXPLORER_SERVICE_NAME[industryKey] || MAP_EXPLORER_SERVICE_NAME.all;
+  const inferredSvc = inferServiceFromMapExplorerContext(ctx);
+  const resolvedService = inferredSvc || State.service_name;
+  const chosenArea =
+    ctx.area_code
+      ? {
+          area_code: ctx.area_code,
+          area_name: ctx.area_name || '',
+          district: ctx.district || '',
+          dong: ctx.dong || '',
+        }
+      : (cand && cand.area_code ? cand : null);
+
+  applyMapExplorerDefaultsToState(chosenArea, resolvedService);
 
   State.mapExplorerSummary = {
     lat,
     lon,
     radius_m: radius,
     industryKey,
-    area_code: ctx.area_code || '',
-    area_name: ctx.area_name || '',
-    service_name: State.service_name,
+    area_code: chosenArea?.area_code || '',
+    area_name: chosenArea?.area_name || '',
+    service_name: resolvedService,
     density_level: ctx.density_level || '',
     same_or_similar_stores:
       ctx.same_or_similar_stores === undefined || ctx.same_or_similar_stores === ''
         ? null
         : ctx.same_or_similar_stores,
   };
+  State.mapExplorerContext = {
+    ...State.mapExplorerContext,
+    area_code: chosenArea?.area_code || '',
+    area_name: chosenArea?.area_name || '',
+    district: chosenArea?.district || '',
+    dong: chosenArea?.dong || '',
+    service_name: resolvedService,
+    place_category: ctx.place_category || '',
+    place_title: ctx.place_title || '',
+  };
+  State.mapExplorerAreaPrefillPending = true;
 
   if (kind === 'wizard') {
     State.user_type = '';
@@ -4745,7 +4999,17 @@ async function goDiagnosisFromMapExplorer(kind, ctx) {
   }
 
   if (kind === 'operate') {
-    window.__MAP_EXPLORER_LAST_CONTEXT__ = { lat, lon, radius_m: radius, industryKey };
+    window.__MAP_EXPLORER_LAST_CONTEXT__ = {
+      lat,
+      lon,
+      radius_m: radius,
+      industryKey,
+      area_code: chosenArea?.area_code || '',
+      area_name: chosenArea?.area_name || '',
+      district: chosenArea?.district || '',
+      dong: chosenArea?.dong || '',
+      service_name: resolvedService || '',
+    };
     if (typeof window.openOperatingStoreSelector === 'function') {
       window.openOperatingStoreSelector();
     } else {
@@ -4757,17 +5021,7 @@ async function goDiagnosisFromMapExplorer(kind, ctx) {
   if (kind === 'startup') {
     State.user_type = '창업 예정자';
     selectUserTypeCard('창업 예정자');
-    if (ctx.area_code && ctx.area_name) {
-      State.district = ctx.district || '';
-      State.dong = ctx.dong || '';
-      State.area_code = ctx.area_code;
-      State.area_name = ctx.area_name;
-    } else if (cand && cand.area_code) {
-      State.district = cand.district || '';
-      State.dong = cand.dong || '';
-      State.area_code = cand.area_code;
-      State.area_name = cand.area_name || '';
-    } else {
+    if (!chosenArea || !chosenArea.area_code) {
       State.district = '';
       State.dong = '';
       State.area_code = '';
@@ -4775,9 +5029,7 @@ async function goDiagnosisFromMapExplorer(kind, ctx) {
       alert('가까운 상권을 자동으로 찾지 못했습니다. 다음 화면에서 상권을 직접 선택해 주세요.');
     }
     goStep('area');
-    await loadDistricts(true);
-    await hydrateAreaSelectionFromState();
-    validateAreaStep();
+    return;
   }
 }
 

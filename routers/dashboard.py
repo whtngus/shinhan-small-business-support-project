@@ -183,7 +183,18 @@ def full_analysis(req: AnalysisRequest):
 
     # 조기경보
     avg_s = _series(sales, "당월_매출_금액", ac, "", add_service=False)
-    warnings = detect_early_warning(sales_s, avg_s, store_s, fp_s)
+    # 창업 예정자: 상권 공공데이터 기반 '분기 매출 감소·상권 대비 매출'는 실제 창업자 실적이 아니므로
+    # AI 평균 자동채우기 여부와 관계없이 조기경보에서 제외(운영 중 사업자만 표시).
+    _is_startup_user = str(req.user_type).strip() == "창업 예정자"
+    warnings = detect_early_warning(
+        sales_s,
+        avg_s,
+        store_s,
+        fp_s,
+        user_type=req.user_type,
+        allow_sales_vs_area_warning=not _is_startup_user,
+        allow_quarter_sales_warning=not _is_startup_user,
+    )
 
     # 상권 대비 매출 비율 (신한카드 목업·해석용)
     sales_vs_area_ratio = None

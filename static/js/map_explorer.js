@@ -25,6 +25,7 @@
     industry: 'all',
     lastPayload: null,
     selectedAreaIdx: null,
+    selectedPlaceMeta: null,
     mapConfig: null,
     providerResolved: null,
     kakaoLoadError: '',
@@ -590,10 +591,14 @@
 
   function bridgePayload(kind) {
     const sum = (ME.lastPayload && ME.lastPayload.summary) || {};
+    const fallbackCand =
+      ME.lastPayload && Array.isArray(ME.lastPayload.area_candidates) && ME.lastPayload.area_candidates.length
+        ? ME.lastPayload.area_candidates[0]
+        : null;
     const cand =
       ME.selectedAreaIdx != null && ME.lastPayload && ME.lastPayload.area_candidates
         ? ME.lastPayload.area_candidates[ME.selectedAreaIdx]
-        : null;
+        : fallbackCand;
     const lat = ME.centerLat;
     const lon = ME.centerLon;
     return {
@@ -608,6 +613,8 @@
       density_level: sum.density_level || '',
       same_or_similar_stores: sum.same_or_similar_stores,
       selection_label: cand ? cand.area_name : '',
+      place_category: ME.selectedPlaceMeta?.category || '',
+      place_title: ME.selectedPlaceMeta?.title || '',
     };
   }
 
@@ -727,6 +734,7 @@
       ME.centerLat = e.latlng.lat;
       ME.centerLon = e.latlng.lng;
       ME.selectedAreaIdx = null;
+      ME.selectedPlaceMeta = null;
       fetchNearby();
     });
     ME.leafletMap.on('moveend', () => {
@@ -757,6 +765,7 @@
       ME.centerLat = latlng.getLat();
       ME.centerLon = latlng.getLng();
       ME.selectedAreaIdx = null;
+      ME.selectedPlaceMeta = null;
       fetchNearby();
     });
     k.event.addListener(ME.kakaoMap, 'idle', function () {
@@ -814,6 +823,7 @@
     ME.pinLon = null;
     ME.lastPayload = null;
     ME.selectedAreaIdx = null;
+    ME.selectedPlaceMeta = null;
     clearStoreMarkersUnified();
     clearKeywordMarkers();
     clearCirclesAll();
@@ -901,6 +911,10 @@
           ME.pinLat = ME.centerLat;
           ME.pinLon = ME.centerLon;
           ME.selectedAreaIdx = null;
+          ME.selectedPlaceMeta = {
+            title: p.title || '',
+            category: p.category_group || p.category || '',
+          };
           box.innerHTML = '';
           if (inp) inp.value = p.title || '';
           fetchNearby();

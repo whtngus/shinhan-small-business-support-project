@@ -203,6 +203,57 @@ def build_shinhan_panels(
         },
     ]
 
+    comp_sc = _f(comp.get("score"), 45)
+    card_rec_items: list[dict[str, Any]] = [
+        {
+            "name": "가맹점 매출·정산 집중형 (사업자·가맹 우대)",
+            "tier_note": "매출 리포트·정산 주기·거래 건수 관리에 유리한 구성을 우선 상담 후보로 둡니다.",
+            "benefits": [
+                "가맹점 전용 매출·거래 요약·시간대별 흐름(서비스 연계 시)",
+                "카드 매출 정산일·입금 예정액 확인으로 현금흐름 예측",
+                "재방문·쿠폰 등 프로모션과 연계한 마케팅 검토",
+            ],
+            "vs_general_note": (
+                "일반 체크카드만 사용할 때보다 사업 비용·매출을 한 카드 흐름으로 묶어 관리하기 쉽습니다."
+            ),
+        },
+        {
+            "name": "경영비·재료비 절감형 (주유·통신·재료 등)",
+            "tier_note": "월 고정비·운영비 지출이 큰 소상공인에게 비용 항목별 혜택을 맞추는 방향입니다.",
+            "benefits": [
+                "주유, 통신, 마트·재료 구매, 배달앱 등 업종별 자주 쓰는 가맹에서 적립·할인",
+                "사업자 등록 기준 경비 지출 내역 관리",
+                "법인·개인사업자별 제공 범위는 상품별 상이",
+            ],
+            "vs_general_note": "동일 지출이라도 혜택 구조에 따라 실질 부담이 달라질 수 있어 비교 상담이 유리합니다.",
+        },
+        {
+            "name": "경쟁 심화·프로모션 강화형",
+            "tier_note": f"반경 내 경쟁 강도가 높은 편(참고 점수 {comp_sc:.0f} 전후)일 때 재방문·객단가 개선에 초점.",
+            "benefits": [
+                "시간대·요일별 취약 구간 보완용 프로모션·쿠폰 설계",
+                "피크 시간대 결제 데이터 기반 운영 피드백(제공 범위는 서비스별 상이)",
+                "가맹점 전용 제휴·이벤트 검토",
+            ],
+            "vs_general_note": "신한카드 가맹·결제 데이터와 연계한 혜택이 있는지 상담 시 확인해 보세요.",
+        },
+    ]
+
+    recommended_cards = {
+        "section_title": "신한카드 혜택 비교·우대 카드(상담 후보)",
+        "lead": (
+            "분석 조건(예상 매출·상권 대비 비율·경쟁 강도)을 반영한 카드 활용 후보입니다. "
+            "실제 카드 상품명·연회비·혜택 상세는 신한카드 상담 및 심사 기준에 따릅니다."
+        ),
+        "items": card_rec_items,
+        "official_url": "https://www.shinhancard.com/",
+        "official_label": "신한카드 공식 사이트",
+        "extra_tip": (
+            f"현재 시뮬레이션상 상권 평균 대비 매출 비율이 약 {ratio * 100:.0f}% 수준일 때, "
+            "매출 관리형·비용 절감형 중 어디에 무게를 둘지 상담에서 함께 정하는 것이 좋습니다."
+        ),
+    }
+
     card_panel = {
         "group": "shinhan_card",
         "brand": "신한카드",
@@ -211,6 +262,7 @@ def build_shinhan_panels(
         "score": round(_f(sc_.get("score"), 53), 1),
         "level": sc_.get("label") or "보통",
         "summary": sc_.get("message") or "카드 매출관리와 프로모션 활용을 검토해볼 수 있습니다.",
+        "recommended_cards": recommended_cards,
         "diagnosis": {
             "monthly_card_sales": card_sales,
             "monthly_transaction_count": txn,
@@ -274,6 +326,54 @@ def build_shinhan_panels(
         },
     ]
 
+    # ─ 신한라이프: 추천 보장(상담 후보) — 실제 상품명은 상담 시 안내, 여기서는 점검용 요약
+    _svc_short = (service_name or "선택 업종").strip() or "선택 업종"
+    life_rec_items: list[dict[str, Any]] = [
+        {
+            "name": "간편형 사업장 화재·시설 종합보장(상담 후보)",
+            "summary": "점포·집기·재고 등 시설 관련 손해와 영업 중단에 따른 손실 보전 가능 여부를 상담에서 확인합니다.",
+            "benefits": [
+                "화재·폭발·누수 등 사업장 시설 피해",
+                "영업 중단 시 고정비·임차료 부담 완화 특약 검토",
+                "업종별 요율·보장 한도는 개별 설계",
+            ],
+            "consult_focus": f"'{_svc_short}' 매장의 면적·시설(주방·창고 등) 기준으로 특약 구성을 검토할 수 있습니다.",
+        },
+        {
+            "name": "배상책임·방문고객 안전 특화(상담 후보)",
+            "summary": "고객 안전사고, 시설물 이용 중 피해 등 배상 책임 영역을 보완하는 방향으로 상담합니다.",
+            "benefits": [
+                "고객 부상·시설 이용 중 사고 등 배상 관련",
+                "음식·서비스 제공 과정에서의 클레임 리스크 점검",
+                "직원 활동과 관련된 제3자 피해(조건에 따라)",
+            ],
+            "consult_focus": "방문 고객이 많은 업종일수록 배상 한도·면책 조건을 함께 확인하는 것이 좋습니다."
+            if visitor
+            else "업종에 따라 배상 특약 필요 여부가 달라질 수 있습니다.",
+        },
+        {
+            "name": "휴업손실·현금흐름 보호 검토(상담 후보)",
+            "summary": "일시 휴업 시 고정비와 매출 공백에 대비한 보장 연계 여부를 논의합니다.",
+            "benefits": [
+                "사업장 화재·사고 등으로 영업이 일시 중단된 경우",
+                "임대료·인건비 등 월 고정비 부담 기간 완화 검토",
+                f"현금 버힘 약 {cm:.1f}개월 전제 시 비상 시나리오 점검",
+            ],
+            "consult_focus": "실제 가입은 보험료·면책·감액 조건을 확인한 뒤 결정해야 합니다.",
+        },
+    ]
+
+    recommended_insurance = {
+        "section_title": "신한라이프 추천 보장 점검",
+        "lead": (
+            "아래는 업종·리스크 진단을 바탕으로 한 보장 영역 상담 후보입니다. "
+            "확정 상품 추천이 아니며, 상품명·보험료·가입 가능 여부는 신한라이프 상담 및 심사를 통해 안내됩니다."
+        ),
+        "items": life_rec_items,
+        "official_url": "https://www.shinhanlife.co.kr/",
+        "official_label": "신한라이프 공식 사이트",
+    }
+
     life_panel = {
         "group": "shinhan_life",
         "brand": "신한라이프",
@@ -282,6 +382,7 @@ def build_shinhan_panels(
         "score": round(_f(sl.get("score"), 40), 1),
         "level": sl.get("label") or "보통",
         "summary": sl.get("message") or "기본 보험 보장 범위를 점검해볼 수 있습니다.",
+        "recommended_insurance": recommended_insurance,
         "diagnosis": {
             "business_type": service_name or "-",
             "visitor_based_business": visitor,
