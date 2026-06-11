@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.data_loader import load_area
 from utils.coord_transform import convert_area_coords
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 router = APIRouter()
 

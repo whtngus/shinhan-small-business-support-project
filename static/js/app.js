@@ -43,6 +43,8 @@ const State = {
   mapExplorerSummary: null,
   /** area 패널 기본값 자동 채움 예약 */
   mapExplorerAreaPrefillPending: false,
+  /** 외부(카카오) 검색 결과 캐시 */
+  externalPlaces: null,
 };
 
 const ACCOUNT_KEY = 'shinhan.account.v1';
@@ -51,6 +53,44 @@ const HISTORY_KEY_PREFIX = 'shinhan.analysisHistory.';
 const ACCOUNT_SYNC_ON = true;
 const MAP_MARKER_LIMIT_LEAFLET = 220;
 const MAP_MARKER_LIMIT_KAKAO = 160;
+
+/** HTML 이스케이프 (외부 검색·결과 렌더 등 전역 사용) */
+function escapeHtml(str) {
+  if (str == null || str === '') return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function hasPlaceCoords(p) {
+  if (!p) return false;
+  const lat = Number(p.lat);
+  const lon = Number(p.lon);
+  return Number.isFinite(lat) && Number.isFinite(lon);
+}
+
+function renderExternalPlaceCard(p, i) {
+  const title = escapeHtml(p.title || '-');
+  const cat = escapeHtml(p.category || p.category_group || '');
+  const addr = escapeHtml(p.address || '');
+  const tel = p.telephone ? ` · ${escapeHtml(p.telephone)}` : '';
+  const link = p.link ? escapeHtml(p.link) : '';
+  const mapBtn = link
+    ? `<a class="btn btn-secondary btn-xs" href="${link}" target="_blank" rel="noopener noreferrer">카카오맵에서 보기 ↗</a>`
+    : '';
+  const fillBtn = hasPlaceCoords(p)
+    ? `<button type="button" class="btn btn-primary btn-xs" data-fill-place="${i}">이 위치로 지역·업종 채우기</button>`
+    : '';
+  return `
+    <div class="ext-card" data-place-idx="${i}">
+      <div class="ext-title">${title}</div>
+      <div class="ext-meta">${cat}</div>
+      <div class="ext-meta muted">${addr}${tel}</div>
+      <div class="ext-card-actions">${mapBtn}${fillBtn}</div>
+    </div>`;
+}
 
 // ── 초기 진입 ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -355,7 +395,77 @@ async function hydrateAreaSelectionFromState() {
   }
 }
 
+/** 홈 화면 상단: 로그인 사용자 전용 "이어서 관리" 대시보드 밴드 */
+function renderHomeAccountBand() {
+  const band = document.getElementById('home-account-band');
+  if (!band) return;
+
+  if (!State.account) {
+    band.hidden = false;
+    band.classList.add('home-account-band--guest');
+    band.innerHTML = `
+      <div class="hab-guest">
+        <div class="hab-guest-text">
+          <div class="hab-guest-title">내 사업장을 등록하고 이어서 관리하세요</div>
+          <div class="hab-guest-desc">로그인하면 분석 조건과 진단 이력이 저장되어, 다음 방문 때 처음부터 다시 입력하지 않아도 됩니다.</div>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="hab-guest-login">로그인 · 내 계정 열기</button>
+      </div>`;
+    document.getElementById('hab-guest-login')?.addEventListener('click', () => {
+      const pop = document.getElementById('account-popover');
+      if (pop) pop.removeAttribute('hidden');
+    });
+    return;
+  }
+
+  band.hidden = false;
+  band.classList.remove('home-account-band--guest');
+  const saved = loadSavedProfiles();
+  const history = loadAnalysisHistory();
+  const name = escapeHtml(State.account.name || '사용자');
+  const recent = history.slice(0, 3);
+
+  const recentHtml = recent.length
+    ? recent.map((r) => `
+        <button type="button" class="hab-recent-card" data-hab-open="${escapeHtml(r.id)}">
+          <span class="hab-recent-type">${escapeHtml(r.payload?.user_type || '분석')}</span>
+          <span class="hab-recent-title">${escapeHtml(r.headline || '-')}</span>
+          <span class="hab-recent-date">${new Date(r.created_at).toLocaleDateString('ko-KR')} 진단</span>
+        </button>`).join('')
+    : `<div class="hab-empty">아직 진단 이력이 없습니다. 아래에서 새 분석을 시작하면 여기에 자동으로 쌓입니다.</div>`;
+
+  band.innerHTML = `
+    <div class="hab-head">
+      <div class="hab-greeting">
+        <span class="hab-badge">내 워크스페이스</span>
+        <h2 class="hab-title">${name} 님, 다시 오셨네요</h2>
+        <p class="hab-sub">저장된 사업장 <b>${saved.length}</b>건 · 진단 이력 <b>${history.length}</b>건이 계정에 보관되어 있습니다.</p>
+      </div>
+      <div class="hab-actions">
+        <button type="button" class="btn btn-secondary btn-sm" id="hab-open-operating">운영 매장 진단</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="hab-open-account">내 계정 전체보기</button>
+      </div>
+    </div>
+    <div class="hab-recent-row">
+      <div class="hab-recent-label">최근 진단 이어보기</div>
+      <div class="hab-recent-list">${recentHtml}</div>
+    </div>`;
+
+  band.querySelectorAll('[data-hab-open]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = history.find((x) => x.id === btn.dataset.habOpen);
+      if (row) loadHistoryToDashboard(row);
+    });
+  });
+  document.getElementById('hab-open-operating')?.addEventListener('click', quickGoOperating);
+  document.getElementById('hab-open-account')?.addEventListener('click', () => {
+    const pop = document.getElementById('account-popover');
+    if (pop) pop.removeAttribute('hidden');
+  });
+}
+
 function renderSavedProfiles() {
+  renderHomeAccountBand();
   const wrap = document.getElementById('saved-profiles');
   const status = document.getElementById('account-status');
   const panelBtn = document.getElementById('btn-account-panel');
@@ -577,6 +687,8 @@ function goStep(step) {
   }
 
   if (step === 'finance') updateMapExplorerFinanceBanner();
+
+  if (step === 'home') renderHomeAccountBand();
 
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -907,64 +1019,217 @@ async function toggleSearchHelp() {
   tip.removeAttribute('hidden');
 }
 
+function ensureExternalSearchOpen() {
+  const body = document.getElementById('external-body');
+  const btn = document.getElementById('btn-toggle-external');
+  if (body && body.hasAttribute('hidden')) {
+    body.removeAttribute('hidden');
+    if (btn) btn.textContent = '고급 검색 닫기';
+  }
+}
+
+function scrollToExternalResults() {
+  const el = document.getElementById('external-results');
+  if (!el) return;
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.remove('external-results--flash');
+    void el.offsetWidth;
+    el.classList.add('external-results--flash');
+    setTimeout(() => el.classList.remove('external-results--flash'), 2200);
+  });
+}
+
 async function runExternalSearch() {
   const q = (document.getElementById('inp-external-q').value || '').trim();
   if (!q) return;
+  ensureExternalSearchOpen();
   const status = document.getElementById('external-status');
   const placesEl  = document.getElementById('external-places');
   const matchedEl = document.getElementById('external-matched');
   status.innerHTML = '<span class="muted">카카오 검색 중…</span>';
-  placesEl.innerHTML = ''; matchedEl.innerHTML = '';
+  placesEl.innerHTML = '';
+  matchedEl.innerHTML = '';
 
   let res;
   try {
     res = await fetchJson('/api/external-search?q=' + encodeURIComponent(q));
   } catch (e) {
-    status.innerHTML = '<span class="error">외부 검색 실패. 카카오 REST API 키와 네트워크를 확인해주세요.</span>';
+    console.error('[external-search]', e);
+    status.innerHTML = `<span class="error">외부 검색 실패. 카카오 REST API 키와 네트워크를 확인해주세요. (${escapeHtml(e.message || '오류')})</span>`;
+    placesEl.innerHTML = '<div class="muted">결과 없음</div>';
     return;
   }
 
-  status.innerHTML = res.kakao_enabled
-    ? '<span class="ok">카카오 검색 결과를 가져왔습니다.</span>'
-    : `<span class="warn">${res.help.external_help}</span>`;
+  const errMsg = (res && res.errors && res.errors.local) ? String(res.errors.local) : '';
+  const places = Array.isArray(res.local_places) ? res.local_places : [];
 
-  placesEl.innerHTML = (res.local_places || []).map(p => `
-    <a class="ext-card link" href="${p.link}" target="_blank" rel="noopener noreferrer">
-      <div class="ext-title">${p.title || '-'}</div>
-      <div class="ext-meta">${p.category || p.category_group || ''}</div>
-      <div class="ext-meta muted">${p.address || ''}${p.telephone ? ' · ' + p.telephone : ''}</div>
-    </a>`).join('') || '<div class="muted">결과 없음</div>';
+  if (res.kakao_enabled) {
+    status.innerHTML = errMsg
+      ? `<span class="warn">카카오 API 오류: ${escapeHtml(errMsg)}</span>`
+      : `<span class="ok">카카오 검색 결과 ${places.length}건</span>
+         <button type="button" class="ext-jump" id="btn-jump-ext-results">결과 위치로 이동 ↓</button>`;
+  } else {
+    const help = (res.help && res.help.external_help) ? res.help.external_help : '카카오 REST API 키가 설정되지 않았습니다.';
+    status.innerHTML = `<span class="warn">${escapeHtml(help)}</span>`;
+  }
 
-  if ((res.matched_areas || []).length === 0) {
+  State.externalPlaces = places;
+
+  try {
+    placesEl.innerHTML = places.length
+      ? places.map((p, i) => renderExternalPlaceCard(p, i)).join('')
+      : `<div class="muted">검색 결과가 없습니다.${errMsg ? `<br><span class="error">${escapeHtml(errMsg)}</span>` : ''}</div>`;
+
+    placesEl.querySelectorAll('[data-fill-place]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.dataset.fillPlace);
+        const list = State.externalPlaces || [];
+        const place = list[idx];
+        if (place) fillAreaFromPlace(place, q, btn);
+      });
+    });
+  } catch (renderErr) {
+    console.error('[external-search render]', renderErr);
+    placesEl.innerHTML = `<div class="error">결과 표시 중 오류가 발생했습니다. (${escapeHtml(renderErr.message || '렌더 오류')})</div>`;
+  }
+
+  const matched = Array.isArray(res.matched_areas) ? res.matched_areas : [];
+  if (!matched.length) {
     matchedEl.innerHTML = '<div class="muted">매칭되는 공공 데이터 상권을 찾지 못했습니다.<br>좌측 결과의 위치 정보를 활용해 자치구를 직접 선택해주세요.</div>';
   } else {
-    matchedEl.innerHTML = res.matched_areas.map(a => `
-      <div class="ext-card matched" data-area="${a.area_code}" data-name="${a.area_name}" data-district="${a.district}" data-dong="${a.dong}">
-        <div class="ext-title">${a.area_name}</div>
-        <div class="ext-meta">${a.area_type} · ${a.district} ${a.dong}</div>
-        <div class="ext-meta muted">검색 위치에서 약 ${a.dist_m}m</div>
+    matchedEl.innerHTML = matched.map(a => `
+      <div class="ext-card matched" data-area="${escapeHtml(a.area_code)}" data-name="${escapeHtml(a.area_name)}" data-district="${escapeHtml(a.district)}" data-dong="${escapeHtml(a.dong)}">
+        <div class="ext-title">${escapeHtml(a.area_name)}</div>
+        <div class="ext-meta">${escapeHtml(a.area_type)} · ${escapeHtml(a.district)} ${escapeHtml(a.dong)}</div>
+        <div class="ext-meta muted">검색 위치에서 약 ${escapeHtml(String(a.dist_m))}m</div>
         <button class="btn btn-secondary btn-xs">이 상권 선택</button>
       </div>`).join('');
     matchedEl.querySelectorAll('.ext-card.matched').forEach(card => {
       card.addEventListener('click', () => applyMatchedArea(card.dataset, q));
     });
   }
+
+  document.getElementById('btn-jump-ext-results')?.addEventListener('click', scrollToExternalResults);
+  scrollToExternalResults();
 }
 
-function guessServiceNameFromKeyword(q) {
-  const s = String(q || '').toLowerCase();
+/** 검색어·카카오 카테고리·상호명에서 공공데이터 업종명 추정 */
+function inferServiceNameFromText(raw) {
+  const s = String(raw || '').toLowerCase();
   if (!s) return '';
-  if (s.includes('약국') || s.includes('의약')) return '의약품';
-  if (s.includes('카페') || s.includes('커피') || s.includes('스타벅스')) return '커피-음료';
+  if (s.includes('약국') || s.includes('의약') || s.includes('한약')) return '의약품';
+  if (s.includes('카페') || s.includes('커피') || s.includes('스타벅스') || s.includes('베이커') || s.includes('디저트')) return '커피-음료';
   if (s.includes('치킨')) return '치킨전문점';
-  if (s.includes('분식')) return '분식전문점';
-  if (s.includes('편의점')) return '편의점';
-  if (s.includes('미용') || s.includes('헤어')) return '미용실';
+  if (s.includes('분식') || s.includes('떡볶') || s.includes('김밥')) return '분식전문점';
+  if (s.includes('편의점') || s.includes('cu') || s.includes('gs25') || s.includes('세븐일레븐')) return '편의점';
+  if (s.includes('미용') || s.includes('헤어') || s.includes('네일') || s.includes('이발')) return '미용실';
   if (s.includes('사진')) return '사진관';
+  if (s.includes('학원') || s.includes('교습') || s.includes('어학')) return '일반교습학원';
+  if (s.includes('피트니스') || s.includes('헬스') || s.includes('요가') || s.includes('필라테스')) return '헬스장';
+  if (s.includes('세탁')) return '세탁소';
+  if (s.includes('주점') || s.includes('술집') || s.includes('호프') || s.includes('바')) return '일반유흥주점';
+  if (s.includes('한식') || s.includes('국밥') || s.includes('찌개') || s.includes('백반')) return '한식음식점';
+  if (s.includes('중식') || s.includes('중국')) return '중식음식점';
+  if (s.includes('일식') || s.includes('초밥') || s.includes('돈까스') || s.includes('라멘')) return '일식음식점';
+  if (s.includes('양식') || s.includes('파스타') || s.includes('스테이크') || s.includes('피자')) return '양식음식점';
+  if (s.includes('패스트푸드') || s.includes('버거') || s.includes('햄버거')) return '패스트푸드';
+  if (s.includes('베이커') || s.includes('빵') || s.includes('제과')) return '제과점';
+  if (s.includes('슈퍼') || s.includes('마트') || s.includes('식자재')) return '슈퍼마켓';
+  if (s.includes('부동산')) return '부동산중개업';
+  if (s.includes('세차') || s.includes('주유')) return '세차장';
   return '';
 }
 
-async function applyMatchedArea(d, sourceKeyword = '') {
+function guessServiceNameFromKeyword(q) {
+  return inferServiceNameFromText(q);
+}
+
+/** 카카오 로컬 place 객체(category·상호·검색어)에서 업종 추정 */
+function guessServiceNameFromPlace(place, sourceKeyword = '') {
+  if (!place) return guessServiceNameFromKeyword(sourceKeyword);
+  const parts = [
+    place.category,
+    place.category_group,
+    place.title,
+    sourceKeyword,
+  ].filter(Boolean);
+  for (const part of parts) {
+    const hit = inferServiceNameFromText(part);
+    if (hit) return hit;
+  }
+  return '';
+}
+
+/** sel-service 옵션 중 추정 업종과 가장 잘 맞는 값 선택 (없으면 옵션 추가) */
+function applyServiceNameToSelect(serviceSel, serviceName, labelSuffix = '외부 검색 추정') {
+  if (!serviceSel || !serviceName) return false;
+  const guess = String(serviceName).trim();
+  if (!guess) return false;
+
+  const opts = [...serviceSel.options].filter((o) => o.value);
+  let matched = opts.find((o) => o.value === guess);
+  if (!matched) {
+    matched = opts.find((o) => o.value.includes(guess) || guess.includes(o.value));
+  }
+  if (!matched) {
+    const gLower = guess.toLowerCase();
+    matched = opts.find((o) => {
+      const v = String(o.value).toLowerCase();
+      return v.includes(gLower) || gLower.includes(v);
+    });
+  }
+
+  const finalVal = matched ? matched.value : guess;
+  if (!opts.some((o) => o.value === finalVal)) {
+    const opt = document.createElement('option');
+    opt.value = finalVal;
+    opt.textContent = `${finalVal} (${labelSuffix})`;
+    serviceSel.appendChild(opt);
+  }
+  serviceSel.value = finalVal;
+  onServiceChange();
+  return true;
+}
+
+/** 카카오 로컬 검색 결과(가맹점)의 좌표로 가장 가까운 공공데이터 상권을 찾아
+ *  자치구·행정동·상권·업종을 자동으로 채운다. (지도 이동은 별도 '카카오맵에서 보기' 버튼) */
+async function fillAreaFromPlace(place, sourceKeyword = '', btnEl = null) {
+  if (!place || !place.lat || !place.lon) {
+    alert('이 장소는 좌표 정보가 없어 자동 채우기를 할 수 없습니다.');
+    return;
+  }
+  const prevText = btnEl ? btnEl.textContent : '';
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '매칭 중…'; }
+  try {
+    const res = await fetchJson(
+      `/api/map-explorer/nearest-area?lat=${encodeURIComponent(place.lat)}&lon=${encodeURIComponent(place.lon)}`,
+    );
+    const cand = (res?.candidates || [])[0];
+    if (!cand || !cand.area_code) {
+      alert('가까운 공공데이터 상권을 찾지 못했습니다. 우측 매칭 상권 목록을 이용해 주세요.');
+      return;
+    }
+    const svcGuess = guessServiceNameFromPlace(place, sourceKeyword);
+    await applyMatchedArea(
+      {
+        area: cand.area_code,
+        name: cand.area_name,
+        district: cand.district,
+        dong: cand.dong,
+      },
+      sourceKeyword || place.title || '',
+      svcGuess,
+    );
+  } catch (e) {
+    alert('지역·업종 자동 채우기에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+  } finally {
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = prevText; }
+  }
+}
+
+async function applyMatchedArea(d, sourceKeyword = '', serviceHint = '') {
   if (!d.area) return;
   // 자치구 → 행정동 → 상권 → (사용자가 업종 선택) 순서로 자동 채움
   const distSel = document.getElementById('sel-district');
@@ -991,19 +1256,10 @@ async function applyMatchedArea(d, sourceKeyword = '') {
   }
   areaSel.value = d.area;
   await onAreaChange();
-  const svcGuess = guessServiceNameFromKeyword(sourceKeyword);
-  if (svcGuess) {
-    const serviceSel = document.getElementById('sel-service');
-    if (serviceSel) {
-      if (![...serviceSel.options].some(o => o.value === svcGuess)) {
-        const opt = document.createElement('option');
-        opt.value = svcGuess;
-        opt.textContent = `${svcGuess} (검색 키워드 추정)`;
-        serviceSel.appendChild(opt);
-      }
-      serviceSel.value = svcGuess;
-      onServiceChange();
-    }
+  const svcGuess = String(serviceHint || '').trim() || guessServiceNameFromKeyword(sourceKeyword);
+  const serviceSel = document.getElementById('sel-service');
+  if (svcGuess && serviceSel) {
+    applyServiceNameToSelect(serviceSel, svcGuess);
   }
   document.querySelector('#panel-area .external-search-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -3087,15 +3343,6 @@ function buildScoreReason(scoreKey, scoreLabel, scoreValue, data) {
     return normalizeReasonBulletArray([...out, ...extra]).slice(0, 4);
   }
   return fb.length ? fb.slice(0, 4) : [];
-}
-
-function escapeHtml(str) {
-  if (str == null || str === '') return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function buildScoreTooltipBody(k, sc, data) {

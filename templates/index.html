@@ -6,7 +6,7 @@
   <title>신한 자영업 경영지원 컨설팅 | 단계형 분석</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/style.css?v=20260430shinrec">
+  <link rel="stylesheet" href="/static/css/style.css?v=20260608extscroll">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -67,6 +67,9 @@
 
   <!-- 0. 홈 화면 -->
   <section class="panel home-panel" id="panel-home">
+    <!-- 로그인 시: 이어서 관리하는 대시보드 밴드 (비로그인 시 안내) -->
+    <div class="home-account-band" id="home-account-band" hidden></div>
+
     <div class="hero">
       <div class="hero-text">
         <div class="hero-tag">신한금융그룹 · 자영업 컨설팅 PoC</div>
@@ -305,38 +308,63 @@
       <p>선택한 상권의 매출, 유동인구, 경쟁점, 생존율, 임대료 지표를 기반으로 컨설팅 결과를 제공합니다.</p>
     </div>
 
-    <div class="form-grid">
-      <div class="form-item">
-        <label>자치구</label>
-        <select id="sel-district"><option value="">자치구 선택</option></select>
+    <div class="area-select-shell">
+      <!-- ① 지역 좁히기 -->
+      <div class="area-select-block">
+        <div class="area-block-head">
+          <span class="area-block-no">1</span>
+          <div class="area-block-meta">
+            <div class="area-block-title">지역 좁히기</div>
+            <div class="area-block-desc">자치구·행정동으로 분석 범위를 먼저 좁힙니다.</div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-item">
+            <label>자치구</label>
+            <select id="sel-district"><option value="">자치구 선택</option></select>
+          </div>
+          <div class="form-item">
+            <label>행정동 <span class="optional">선택</span></label>
+            <select id="sel-dong"><option value="">행정동 선택</option></select>
+          </div>
+          <div class="form-item">
+            <label>
+              상권 검색 <span class="optional">선택</span>
+              <span class="help-icon" data-help="search-meaning" title="검색 의미 보기">?</span>
+            </label>
+            <input type="text" id="inp-area-q" placeholder="예: 강남, 홍대, 종로">
+            <div class="search-help" id="search-help-tooltip" hidden></div>
+          </div>
+        </div>
+        <div class="area-chip-row">
+          <span class="area-chip-label">빠른 검색</span>
+          <div class="chips">
+            <span class="chip" data-search="강남">강남 카페</span>
+            <span class="chip" data-search="홍대">홍대 음식점</span>
+            <span class="chip" data-search="종로">종로 미용실</span>
+            <span class="chip" data-search="이태원">이태원 술집</span>
+          </div>
+        </div>
       </div>
-      <div class="form-item">
-        <label>행정동 <span class="optional">선택</span></label>
-        <select id="sel-dong"><option value="">행정동 선택</option></select>
-      </div>
-      <div class="form-item">
-        <label>
-          상권 검색 <span class="optional">선택</span>
-          <span class="help-icon" data-help="search-meaning" title="검색 의미 보기">?</span>
-        </label>
-        <input type="text" id="inp-area-q" placeholder="예: 강남, 홍대, 종로">
-        <div class="search-help" id="search-help-tooltip" hidden></div>
-      </div>
-      <div class="form-item">
-        <label>상권</label>
-        <select id="sel-area"><option value="">상권 선택</option></select>
-      </div>
-      <div class="form-item">
-        <label>서비스 업종</label>
-        <select id="sel-service"><option value="">업종 선택</option></select>
-      </div>
-      <div class="form-item form-info">
-        <div class="form-tip-title">검색 예시</div>
-        <div class="chips">
-          <span class="chip" data-search="강남">강남 카페</span>
-          <span class="chip" data-search="홍대">홍대 음식점</span>
-          <span class="chip" data-search="종로">종로 미용실</span>
-          <span class="chip" data-search="이태원">이태원 술집</span>
+
+      <!-- ② 상권·업종 확정 -->
+      <div class="area-select-block">
+        <div class="area-block-head">
+          <span class="area-block-no">2</span>
+          <div class="area-block-meta">
+            <div class="area-block-title">상권 · 업종 확정</div>
+            <div class="area-block-desc">분석할 상권과 업종을 선택하면 다음 단계가 활성화됩니다.</div>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-item">
+            <label>상권</label>
+            <select id="sel-area"><option value="">상권 선택</option></select>
+          </div>
+          <div class="form-item">
+            <label>서비스 업종</label>
+            <select id="sel-service"><option value="">업종 선택</option></select>
+          </div>
         </div>
       </div>
     </div>
@@ -359,7 +387,7 @@
           <button class="btn btn-primary btn-sm" id="btn-external-search">검색</button>
         </div>
         <div class="external-status" id="external-status"></div>
-        <div class="external-results external-results-2col">
+        <div class="external-results external-results-2col" id="external-results">
           <div class="external-col">
             <div class="external-col-title">📍 카카오 로컬 점포</div>
             <div id="external-places" class="external-list"></div>
@@ -372,7 +400,7 @@
       </div>
     </div>
 
-    <div class="panel-actions">
+    <div class="panel-actions panel-actions-sticky">
       <button class="btn btn-back"    data-go="user-type">이전</button>
       <button class="btn btn-primary" id="btn-next-2" disabled>다음</button>
     </div>
@@ -759,7 +787,7 @@
 <script defer src="/static/js/shinhan_cta_registry.js?v=20260430h"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>window.__GOOGLE_CLIENT_ID__="{{ google_client_id | default('', true) }}";</script>
-<script defer src="/static/js/app.js?v=20260430orfsrc"></script>
+<script defer src="/static/js/app.js?v=20260608extscroll"></script>
 <script defer src="/static/js/map_explorer.js?v=20260429meux"></script>
 <script defer src="/static/js/operating_business.js?v=20260430planreport"></script>
 <script defer src="/static/js/financial_check.js?v=20260430f"></script>
